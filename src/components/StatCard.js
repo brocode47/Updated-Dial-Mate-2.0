@@ -1,17 +1,43 @@
 import { html } from '../jsx.js';
 
-export function StatCard(props) {
+export function StatCard({
+  label,
+  value,
+  help,
+  icon,
+  trend,
+  className = ''
+}) {
+  const Icon = icon;
+
   return html`
-    <div className="soft-card rounded-[var(--radius-lg)] p-5 transition-all duration-300 hover:-translate-y-1 hover:shadow-medium">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-sm text-[hsl(var(--foreground)/0.6)]">${props.label}</div>
-          <div className="mt-3 text-2xl font-semibold md:text-3xl">${props.value}</div>
-          <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.62)]">${props.help}</div>
+    <div className=${`relative overflow-hidden soft-card rounded-[var(--radius-lg)] p-5 transition-all duration-300 hover:-translate-y-1 hover:shadow-medium sm:p-6 ${className}`}>
+      <div className="pointer-events-none absolute right-0 top-0 h-24 w-24 rounded-bl-full bg-[hsl(var(--primary)/0.08)]"></div>
+
+      <div className="relative flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          ${label ? html`<div className="text-sm text-[hsl(var(--foreground)/0.6)]">${label}</div>` : null}
+
+          <div className="mt-2 text-2xl font-semibold leading-tight md:text-3xl">
+            ${value ?? '—'}
+          </div>
+
+          ${help ? html`<div className="mt-2 text-sm text-[hsl(var(--foreground)/0.62)]">${help}</div>` : null}
+
+          ${trend ? html`
+            <div className=${`mt-2 text-xs font-medium ${
+              trend > 0 ? 'text-emerald-600' : trend < 0 ? 'text-red-600' : 'text-[hsl(var(--foreground)/0.6)]'
+            }`}>
+              ${trend > 0 ? '+' : ''}${trend}%
+            </div>
+          ` : null}
         </div>
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]">
-          <${props.icon} size=${20} />
-        </div>
+
+        ${Icon ? html`
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]">
+            <${Icon} size=${20} />
+          </div>
+        ` : null}
       </div>
     </div>
   `;

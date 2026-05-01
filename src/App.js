@@ -26,7 +26,7 @@ export function App() {
     const onHashChange = () => setRoute(hashRoute());
     window.addEventListener('hashchange', onHashChange);
     if (!window.location.hash) {
-      window.location.hash = '/dashboard';
+      window.location.hash = '/onboarding';
     }
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);

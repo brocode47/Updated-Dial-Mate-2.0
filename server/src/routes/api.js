@@ -12,10 +12,15 @@ export function apiRouter() {
     const db = getDb();
     const shop = req.params.shop;
 
-    const rows = await db.all(
-      'SELECT id, shop, status, tag, riskScore, updatedAt, payload FROM orders WHERE shop=? ORDER BY updatedAt DESC LIMIT 200',
-      [shop]
-    );
+  const rows = await db.all(
+  `SELECT id, shop, status, tag, riskScore, updatedAt, payload,
+          callStatus, retryCount, whatsappSent
+   FROM orders
+   WHERE shop=?
+   ORDER BY updatedAt DESC
+   LIMIT 200`,
+  [shop]
+);
 
     const orders = rows.map((r) => {
       const payload = JSON.parse(r.payload);
@@ -25,6 +30,10 @@ export function apiRouter() {
         status: r.status,
         tag: r.tag,
         risk: r.riskScore,
+        callStatus: r.callStatus || 'pending',
+        retryCount: r.retryCount || 0,
+        whatsappSent: r.whatsappSent || 0,
+
         customer: payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer',
         city: payload?.shipping_address?.city || '',
         phone: payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || '',

@@ -7,36 +7,56 @@ let db;
 export async function initDb() {
   if (db) return db;
 
-  const filename = process.env.DATABASE_URL || './data.sqlite';
-  db = await open({ filename, driver: sqlite3.Database });
+  db = await open({
+    filename: './data.sqlite',
+    driver: sqlite3.Database
+  });
 
+  // ===============================
+  // 📦 ORDERS TABLE
+  // ===============================
   await db.exec(`
-    PRAGMA journal_mode = WAL;
-
-    CREATE TABLE IF NOT EXISTS shops (
-      shop TEXT PRIMARY KEY,
-      accessToken TEXT NOT NULL,
-      installedAt INTEGER NOT NULL
-    );
-
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY,
-      shop TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      createdAt INTEGER NOT NULL,
-      updatedAt INTEGER NOT NULL,
+      shop TEXT,
+      shopifyOrderGid TEXT,
+      payload TEXT,
       status TEXT,
       tag TEXT,
-      riskScore INTEGER DEFAULT 0,
-      FOREIGN KEY(shop) REFERENCES shops(shop)
-    );
+      riskScore REAL,
+      retryCount INTEGER DEFAULT 0,
+      callStatus TEXT DEFAULT 'pending',
+      callSid TEXT,
+      lastCallAt INTEGER,
+      createdAt INTEGER,
+      updatedAt INTEGER
+    )
+  `);
 
-    CREATE INDEX IF NOT EXISTS idx_orders_shop_updatedAt ON orders(shop, updatedAt);
+  // ✅ Add missing columns safely for old database
+  // ✅ Add missing columns safely for old database
+try {
+  await db.exec(`ALTER TABLE orders ADD COLUMN callStatus TEXT DEFAULT 'pending'`);
+} catch (err) {}
 
+try {
+  await db.exec(`ALTER TABLE orders ADD COLUMN callSid TEXT`);
+} catch (err) {}
+
+
+
+try {
+await db.exec(`ALTER TABLE orders ADD COLUMN shopifyOrderGid TEXT`);
+} catch (err) {}
+
+  // ===============================
+  // 📞 CALLS TABLE
+  // ===============================
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS calls (
       id TEXT PRIMARY KEY,
-      shop TEXT NOT NULL,
-      orderId TEXT NOT NULL,
+      shop TEXT,
+      orderId TEXT,
       outcome TEXT,
       intent TEXT,
       sentiment TEXT,
@@ -44,35 +64,60 @@ export async function initDb() {
       recordingUrl TEXT,
       transcript TEXT,
       providerCallSid TEXT,
-      createdAt INTEGER NOT NULL,
-      FOREIGN KEY(shop) REFERENCES shops(shop)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_calls_shop_createdAt ON calls(shop, createdAt);
-
-    CREATE TABLE IF NOT EXISTS compliance_logs (
-      id TEXT PRIMARY KEY,
-      shop TEXT NOT NULL,
-      event TEXT NOT NULL,
-      detail TEXT,
-      createdAt INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_logs_shop_createdAt ON compliance_logs(shop, createdAt);
+      createdAt INTEGER
+    )
   `);
 
+  // ===============================
+  // 🛡️ COMPLIANCE LOGS
+  // ===============================
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS compliance_logs (
+      id TEXT PRIMARY KEY,
+      shop TEXT,
+      event TEXT,
+      detail TEXT,
+      createdAt INTEGER
+    )
+  `);
+
+  // ===============================
+  // 🏪 SHOPS TABLE
+  // ===============================
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS shops (
+      shop TEXT PRIMARY KEY,
+      accessToken TEXT,
+      installedAt INTEGER
+    )
+  `);
+
+
+  console.log('✅ Database initialized');
+
   return db;
 }
 
+// ===============================
+// 📦 GET DB
+// ===============================
 export function getDb() {
-  if (!db) throw new Error('DB not initialized');
+  if (!db) {
+    throw new Error('DB not initialized. Call initDb() first.');
+  }
   return db;
 }
 
+// ===============================
+// ⏱️ TIME HELPER
+// ===============================
 export function now() {
   return Date.now();
 }
 
+// ===============================
+// 🆔 ID GENERATOR
+// ===============================
 export function uid(prefix = 'id') {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }

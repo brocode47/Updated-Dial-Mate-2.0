@@ -1,3 +1,7 @@
+console.log('🔎 SHOPIFY_API_KEY exists:', !!process.env.SHOPIFY_API_KEY);
+console.log('🔎 SHOPIFY_API_SECRET exists:', !!process.env.SHOPIFY_API_SECRET);
+console.log('🔎 APP_URL:', process.env.APP_URL);
+
 import '@shopify/shopify-api/adapters/node';
 /* __imports_rewritten__ */
 import { shopifyApi, LATEST_API_VERSION } from '@shopify/shopify-api';
@@ -5,8 +9,8 @@ import { shopifyApi, LATEST_API_VERSION } from '@shopify/shopify-api';
 const apiVersion = process.env.SHOPIFY_API_VERSION || LATEST_API_VERSION;
 
 export const shopify = shopifyApi({
-  apiKey: process.env.SHOPIFY_API_KEY || 'your-shopify-api-key-here',
-  apiSecretKey: process.env.SHOPIFY_API_SECRET || 'your-shopify-api-secret-here',
+  apiKey: process.env.SHOPIFY_API_KEY,
+apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: (process.env.SHOPIFY_SCOPES || 'read_orders,write_orders').split(',').map((s) => s.trim()).filter(Boolean),
   hostName: new URL(process.env.APP_URL || 'http://localhost:8787').host,
   apiVersion,

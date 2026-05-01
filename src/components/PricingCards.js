@@ -1,27 +1,54 @@
-/* __imports_rewritten__ */
-import { Check, Crown, Languages, ShieldCheck } from 'lucide-react?deps=react';
+import { Check, Crown, PhoneCall, ShieldCheck, Zap } from 'lucide-react?deps=react';
 import { html } from '../jsx.js';
 import { useStore } from '../store.js';
 import { useToast } from '../toast.js';
+import { formatCurrency } from '../utils.js';
 
 const plans = [
   {
     name: 'Starter',
-    price: '$49',
-    blurb: 'For emerging COD stores starting AI confirmations.',
-    features: ['500 AI minutes included', 'Shopify webhook automation', 'Urdu + Roman Urdu understanding', 'Basic fraud scoring']
+    price: 4999,
+    badge: 'For testing',
+    icon: Zap,
+    blurb: 'For small Shopify stores starting automated order confirmations.',
+    features: [
+      '500 calls per month',
+      'Urdu IVR confirmation',
+      'Shopify order webhooks',
+      'Basic retry handling',
+      'Dashboard access'
+    ]
   },
   {
     name: 'Growth',
-    price: '$149',
-    blurb: 'Best for scaling stores with daily order volume.',
-    features: ['2,500 AI minutes included', 'Live order edits and tag sync', 'Returns and FAQ knowledge sync', 'Team seats for operations and support']
+    price: 14999,
+    badge: 'Most popular',
+    icon: PhoneCall,
+    highlighted: true,
+    blurb: 'For growing COD stores with daily order volume.',
+    features: [
+      '3,000 calls per month',
+      'Shopify tagging',
+      'Manual call and retry actions',
+      'Call status analytics',
+      'Team access',
+      'Priority support'
+    ]
   },
   {
     name: 'Scale',
-    price: '$399',
-    blurb: 'For high-volume brands needing white-label and control.',
-    features: ['10,000 AI minutes included', 'White-label dashboard', 'Advanced duplicate and fraud scoring', 'Priority human transfer workflows']
+    price: 34999,
+    badge: 'For agencies',
+    icon: Crown,
+    blurb: 'For high-volume brands, agencies, and multi-store operators.',
+    features: [
+      '10,000 calls per month',
+      'Multi-store support',
+      'White-label dashboard',
+      'Advanced fraud signals',
+      'Custom call scripts',
+      'Dedicated onboarding'
+    ]
   }
 ];
 
@@ -29,40 +56,85 @@ export function PricingCards() {
   const { state, dispatch } = useStore();
   const { pushToast } = useToast();
 
+  const activePlan = state.billing.currentPlan || 'Starter';
+
   return html`
-    <div className="grid gap-4 lg:grid-cols-3">
-      ${plans.map((plan, index) => html`
-        <div key=${plan.name} className=${`soft-card relative rounded-[var(--radius-lg)] p-6 ${index === 1 ? 'ring-2 ring-[hsl(var(--primary)/0.32)]' : ''}`}>
-          ${index === 1 ? html`<div className="absolute right-5 top-5 inline-flex rounded-full bg-[hsl(var(--primary)/0.12)] px-3 py-1 text-xs font-semibold text-[hsl(var(--primary))]">Most Popular</div>` : null}
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]">
-              ${index === 0 ? html`<${ShieldCheck} size=${20} />` : index === 1 ? html`<${Languages} size=${20} />` : html`<${Crown} size=${20} />`}
-            </div>
-            <div>
-              <h3 className="text-xl font-semibold">${plan.name}</h3>
-              <div className="text-sm text-[hsl(var(--foreground)/0.62)]">${plan.blurb}</div>
-            </div>
-          </div>
-          <div className="mt-6 text-4xl font-semibold">${plan.price}<span className="ml-2 text-base font-medium text-[hsl(var(--foreground)/0.58)]">/ month</span></div>
-          <ul className="mt-6 space-y-3">
-            ${plan.features.map((feature) => html`
-              <li key=${feature} className="flex items-start gap-3 text-sm text-[hsl(var(--foreground)/0.78)]">
-                <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]"><${Check} size=${14} /></span>
-                <span>${feature}</span>
-              </li>
-            `)}
-          </ul>
-          <button
-            onClick=${() => {
-              dispatch({ type: 'UPDATE_PLAN', plan: plan.name });
-              pushToast('Plan changed to ' + plan.name, 'success');
-            }}
-            className=${`mt-6 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition-all hover:-translate-y-0.5 ${state.billing.currentPlan === plan.name ? 'bg-[hsl(var(--secondary))] text-white' : 'bg-[hsl(var(--primary))] text-white'}`}
+    <div className="grid gap-4 xl:grid-cols-3">
+      ${plans.map((plan) => {
+        const Icon = plan.icon;
+        const selected = activePlan === plan.name;
+
+        return html`
+          <div
+            key=${plan.name}
+            className=${`relative rounded-3xl border p-5 shadow-soft transition-all ${
+              plan.highlighted
+                ? 'border-[hsl(var(--primary)/0.45)] bg-[hsl(var(--primary)/0.06)]'
+                : 'border-[hsl(var(--border))] bg-[hsl(var(--card))]'
+            }`}
           >
-            ${state.billing.currentPlan === plan.name ? 'Current Plan' : 'Switch to ' + plan.name}
-          </button>
-        </div>
-      `)}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]">
+                  <${Icon} size=${20} />
+                </div>
+
+                <div>
+                  <h3 className="text-xl font-bold">${plan.name}</h3>
+                  <p className="mt-1 text-sm text-[hsl(var(--foreground)/0.62)]">
+                    ${plan.blurb}
+                  </p>
+                </div>
+              </div>
+
+              <span className=${`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${
+                plan.highlighted
+                  ? 'bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]'
+                  : 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.65)]'
+              }`}>
+                ${plan.badge}
+              </span>
+            </div>
+
+            <div className="mt-6">
+              <span className="text-4xl font-bold">${formatCurrency(plan.price)}</span>
+              <span className="ml-2 text-sm font-medium text-[hsl(var(--foreground)/0.55)]">
+                / month
+              </span>
+            </div>
+
+            <ul className="mt-6 space-y-3">
+              ${plan.features.map((feature) => html`
+                <li key=${feature} className="flex items-start gap-3 text-sm text-[hsl(var(--foreground)/0.75)]">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-600">
+                    <${Check} size=${14} />
+                  </span>
+                  <span>${feature}</span>
+                </li>
+              `)}
+            </ul>
+
+            <button
+              onClick=${() => {
+                dispatch({ type: 'UPDATE_PLAN', plan: plan.name });
+                pushToast(
+                  selected
+                    ? `${plan.name} is already your active plan.`
+                    : `${plan.name} plan selected. Payment checkout will be connected during deployment.`,
+                  selected ? 'default' : 'success'
+                );
+              }}
+              className=${`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition-all ${
+                selected
+                  ? 'border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))]'
+                  : 'bg-[hsl(var(--primary))] text-white shadow-medium hover:-translate-y-0.5'
+              }`}
+            >
+              ${selected ? html`<${ShieldCheck} size=${16} /> Current plan` : 'Select ' + plan.name}
+            </button>
+          </div>
+        `;
+      })}
     </div>
   `;
 }

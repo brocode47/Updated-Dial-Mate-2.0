@@ -1,19 +1,83 @@
-// Provider-agnostic interface.
-// Replace this file with your chosen LLM provider (OpenAI, etc.)
+// Provider-agnostic LLM interface.
+// Current Dial Mate production flow uses Twilio IVR.
+// This file is prepared for future AI conversation mode.
 
-export async function generateAgentReply({ systemPrompt, userText, context }) {
-  // IMPORTANT: This repo does NOT ship real API calls to avoid hardcoding keys.
-  // Implement your provider call here.
-  // Return: { text, confidence }.
+export async function generateAgentReply({ systemPrompt, userText, context } = {}) {
+  const safeUserText = String(userText || '').trim();
 
-  const safeUser = String(userText || '').trim();
-  if (!safeUser) {
-    return { text: 'Assalam-o-alaikum. Main aap ke order ki tasdeeq ke liye call kar raha/rahi hun. Kya aap baat kar sakte hain?', confidence: 0.6 };
+  if (!safeUserText) {
+    return {
+      text: 'Assalam o Alaikum. Main aap ke order ki tasdeeq ke liye call kar raha/rahi hoon. Confirm karne ke liye 1 dabayein, cancel karne ke liye 2 dabayein.',
+      confidence: 0.7,
+      provider: 'fallback'
+    };
   }
 
-  // Minimal heuristic fallback:
+  // Future provider integration example:
+  // if (process.env.OPENAI_API_KEY) {
+  //   return await generateWithOpenAI({ systemPrompt, userText: safeUserText, context });
+  // }
+
+  return generateFallbackReply({
+    userText: safeUserText,
+    context
+  });
+}
+
+function generateFallbackReply({ userText, context } = {}) {
+  const text = String(userText || '').toLowerCase();
+
+  if (
+    text.includes('confirm') ||
+    text.includes('ok') ||
+    text.includes('okay') ||
+    text.includes('theek') ||
+    text.includes('haan') ||
+    text.includes('han') ||
+    text.includes('ji')
+  ) {
+    return {
+      text: 'Shukriya. Aapka order confirm kar diya gaya hai.',
+      confidence: 0.75,
+      intent: 'Confirm',
+      provider: 'fallback'
+    };
+  }
+
+  if (
+    text.includes('cancel') ||
+    text.includes('nahi') ||
+    text.includes('nahi chahiye') ||
+    text.includes('galti') ||
+    text.includes('ghalti')
+  ) {
+    return {
+      text: 'Theek hai. Aapka order cancel kar diya gaya hai.',
+      confidence: 0.75,
+      intent: 'Cancel',
+      provider: 'fallback'
+    };
+  }
+
+  if (
+    text.includes('kal') ||
+    text.includes('shaam') ||
+    text.includes('baad') ||
+    text.includes('later') ||
+    text.includes('reschedule')
+  ) {
+    return {
+      text: 'Theek hai. Is order ko review ke liye mark kar diya gaya hai taake team aap se baad mein rabta kar sake.',
+      confidence: 0.65,
+      intent: 'Reschedule',
+      provider: 'fallback'
+    };
+  }
+
   return {
-    text: `Shukriya. Aap ne kaha: "${safeUser}". Kya aap apna order confirm kar rahe hain, cancel, ya reschedule?`,
-    confidence: 0.4
+    text: 'Maaf kijiye, main aapki baat poori tarah samajh nahi saka/saki. Order confirm karne ke liye 1 dabayein, cancel karne ke liye 2 dabayein.',
+    confidence: 0.4,
+    intent: 'Unknown',
+    provider: 'fallback'
   };
 }

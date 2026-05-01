@@ -13,7 +13,9 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-// Registers webhooks with Shopify after OAuth.
+// ===============================
+// ✅ REGISTER WEBHOOKS
+// ===============================
 export async function registerWebhooksForShop({ shop, accessToken }) {
   const restClient = new shopify.clients.Rest({ session: { shop, accessToken } });
 
@@ -43,12 +45,16 @@ export async function registerWebhooksForShop({ shop, accessToken }) {
 
   await initDb();
   const db = getDb();
+
   await db.run(
     'INSERT INTO compliance_logs(id, shop, event, detail, createdAt) VALUES(?,?,?,?,?)',
     [uid('log'), shop, 'Webhook registered', `orders/create + orders/updated -> ${baseUrl}`, now()]
   );
 }
 
+// ===============================
+// ✅ ROUTER
+// ===============================
 export function webhooksRouter() {
   const router = express.Router();
 
@@ -57,22 +63,21 @@ export function webhooksRouter() {
       await handleOrderWebhook(req, res, 'orders/create');
     } catch (error) {
       console.error('❌ Webhook create error:', error);
-      res.status(500).send(error?.message || String(error));
+      res.status(200).send('ok');
     }
   });
 
   router.post('/orders/updated', async (req, res) => {
-    try {
-      await handleOrderWebhook(req, res, 'orders/updated');
-    } catch (error) {
-      console.error('❌ Webhook update error:', error);
-      res.status(500).send(error?.message || String(error));
-    }
+    console.log('📦 orders/updated received, ignored for calling');
+    return res.status(200).send('ok');
   });
 
   return router;
 }
 
+// ===============================
+// ✅ MAIN HANDLER (FIXED)
+// ===============================
 async function handleOrderWebhook(req, res, topic) {
   console.log(`📦 Webhook received: ${topic}`);
 
@@ -82,7 +87,7 @@ async function handleOrderWebhook(req, res, topic) {
 
   if (!secret) {
     console.log('❌ Missing webhook secret');
-    return res.status(500).send('Webhook secret not configured');
+    return res.status(200).send('ok');
   }
 
   const rawBody = req.body.toString('utf8');
@@ -95,15 +100,14 @@ async function handleOrderWebhook(req, res, topic) {
 
   if (!ok) {
     console.log('❌ HMAC verification failed');
-    return res.status(401).send('Invalid webhook signature');
+    return res.status(200).send('ok');
   }
 
   console.log('✅ Webhook verified');
 
   const payload = JSON.parse(rawBody);
-  console.log('📦 FULL PAYLOAD:', JSON.stringify(payload, null, 2));
-
   const orderId = String(payload?.name || payload?.id);
+  const shopifyOrderGid = payload?.admin_graphql_api_id;
 
   await initDb();
   const db = getDb();
@@ -111,10 +115,14 @@ async function handleOrderWebhook(req, res, topic) {
   const riskScore = computeRiskScore(payload);
 
   await db.run(
-    `INSERT INTO orders(id, shop, payload, createdAt, updatedAt, status, tag, riskScore)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updatedAt=excluded.updatedAt, riskScore=excluded.riskScore`,
-    [orderId, shop, rawBody, now(), now(), 'Pending Confirmation', 'Retry', riskScore]
+    `INSERT INTO orders(id, shop, shopifyOrderGid, payload, createdAt, updatedAt, status, tag, riskScore)
+ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ON CONFLICT(id) DO UPDATE SET 
+   payload=excluded.payload,
+   shopifyOrderGid=excluded.shopifyOrderGid,
+   updatedAt=excluded.updatedAt,
+   riskScore=excluded.riskScore`,
+[orderId, shop, shopifyOrderGid, rawBody, now(), now(), 'Pending Confirmation', 'Retry', riskScore]
   );
 
   await db.run(
@@ -123,7 +131,7 @@ async function handleOrderWebhook(req, res, topic) {
   );
 
   // ===============================
-  // 📞 TRIGGER CALL
+  // 📞 TRIGGER CALL (NON-BLOCKING ✅)
   // ===============================
   try {
     const customerName =
@@ -139,11 +147,10 @@ async function handleOrderWebhook(req, res, topic) {
     console.log('📱 RAW PHONE:', phone);
 
     if (!phone) {
-      console.log('❌ No phone number found in order');
+      console.log('❌ No phone number found');
       return res.status(200).send('ok');
     }
 
-    // ✅ Format Pakistani number
     if (!phone.startsWith('+')) {
       phone = '+92' + phone.replace(/^0/, '');
     }
@@ -155,39 +162,103 @@ async function handleOrderWebhook(req, res, topic) {
 
     console.log('📞 Calling:', phone);
 
+    // 🚨 IMPORTANT: NO AWAIT (prevents 502)
+setTimeout(async () => {
+  try {
     await triggerCall({
       phone,
       customerName,
       productName,
-      productPrice
+      productPrice,
+      orderId
     });
+  } catch (err) {
+    console.error('❌ Delayed triggerCall failed:', err.message);
+  }
+}, 100);
 
   } catch (err) {
     console.error('❌ Call trigger failed:', err.message);
   }
 
+  // ✅ ALWAYS respond immediately
   return res.status(200).send('ok');
 }
 
 // ===============================
 // 📞 TWILIO CALL
 // ===============================
-async function triggerCall({ phone, customerName, productName, productPrice }) {
+export async function triggerCall({ phone, customerName, productName, productPrice, orderId }) {
   try {
-    const voiceUrl =
-      `${process.env.APP_URL}/voice?name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
+    const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
+    const fromNumber = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER;
 
-    console.log('🌐 Voice URL:', voiceUrl);
+    const clean = (value, fallback = '') =>
+      String(value || fallback)
+        .replace(/&/g, 'and')
+        .replace(/</g, '')
+        .replace(/>/g, '')
+        .replace(/"/g, '')
+        .replace(/'/g, '');
+
+    if (!appUrl) {
+      console.log('❌ Missing APP_URL in .env');
+      return;
+    }
+
+    if (!fromNumber) {
+      console.log('❌ Missing TWILIO_FROM_NUMBER or TWILIO_PHONE_NUMBER in .env');
+      return;
+    }
+
+    if (!phone) {
+      console.log('❌ Missing customer phone');
+      return;
+    }
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+
+    const gatherUrl = `${appUrl}/gather?orderId=${encodeURIComponent(orderId || '')}`;
+    const statusUrl = `${appUrl}/call-status?orderId=${encodeURIComponent(orderId || '')}`;
+
+    const gather = response.gather({
+      numDigits: 1,
+      action: gatherUrl,
+      method: 'GET',
+      timeout: 10
+    });
+
+    gather.say(
+      `Assalam o Alaikum ${clean(customerName, 'Customer')}. ` +
+      `Aap ne ${clean(productName, 'your product')} order kiya hai. ` +
+      `Iski qeemat ${clean(productPrice, '0')} rupay hai. ` +
+      `Confirm karne ke liye 1 dabayein. ` +
+      `Cancel karne ke liye 2 dabayein.`
+    );
+
+    response.say('Koi jawab nahi mila. Allah Hafiz.');
+
+    const twiml = response.toString();
+
+    console.log('🌐 Status URL:', statusUrl);
+    console.log('🧾 Direct TwiML:', twiml);
+    console.log('📞 Creating Twilio call...');
 
     const call = await client.calls.create({
       to: phone,
-      from: process.env.TWILIO_FROM_NUMBER,
-      url: voiceUrl
+      from: fromNumber,
+      twiml,
+      statusCallback: statusUrl,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST'
     });
 
     console.log('✅ Call initiated:', call.sid);
-
   } catch (err) {
     console.error('❌ Twilio call failed:', err.message);
+    console.error('❌ Twilio code:', err.code);
+    console.error('❌ Twilio status:', err.status);
+    console.error('❌ Twilio more info:', err.moreInfo);
   }
 }
