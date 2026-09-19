@@ -1,0 +1,144 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  shops     Shop[]
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  email          String       @unique
+  passwordHash   String?
+  role           String       @default("OWNER") // OWNER, ADMIN, MANAGER, AGENT, VIEWER
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Shop {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  domain         String       @unique
+  accessToken    String?
+  isActive       Boolean      @default(true)
+  installedAt    DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  customers      Customer[]
+  orders         Order[]
+  conversations  Conversation[]
+  calls          Call[]
+  webhooks       WebhookEvent[]
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  shopId         String
+  shop           Shop     @relation(fields: [shopId], references: [id])
+  shopifyId      String?
+  phone          String?
+  email          String?
+  firstName      String?
+  lastName       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders         Order[]
+  conversations  Conversation[]
+}
+
+model Order {
+  id               String    @id @default(uuid())
+  shopId           String
+  shop             Shop      @relation(fields: [shopId], references: [id])
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  shopifyOrderGid  String?
+  orderNumber      String?
+  payload          String?   // JSON
+  status           String    @default("Pending Confirmation") // Confirmed, Cancelled, etc.
+  tag              String?
+  riskScore        Float?    @default(0.0)
+  retryCount       Int       @default(0)
+  callStatus       String    @default("pending")
+  callSid          String?
+  lastCallAt       DateTime?
+  totalAmount      Float?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  calls            Call[]
+}
+
+model Call {
+  id              String   @id @default(uuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id])
+  orderId         String?
+  order           Order?   @relation(fields: [orderId], references: [id])
+  outcome         String?
+  intent          String?
+  sentiment       String?
+  durationSec     Int?
+  recordingUrl    String?
+  transcript      String?  // JSON or text
+  providerCallSid String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Conversation {
+  id         String   @id @default(uuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id])
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  channel    String   @default("WHATSAPP") // WHATSAPP, VOICE
+  status     String   @default("ACTIVE") // ACTIVE, CLOSED, HUMAN_REQUIRED
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  messages   Message[]
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  sender         String       // CUSTOMER, AI, HUMAN
+  text           String?
+  mediaUrl       String?
+  createdAt      DateTime     @default(now())
+}
+
+model WebhookEvent {
+  id          String   @id @default(uuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id])
+  topic       String
+  payload     String   // JSON
+  processed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model ComplianceLog {
+  id         String   @id @default(uuid())
+  shopDomain String?
+  event      String
+  detail     String?
+  createdAt  DateTime @default(now())
+}

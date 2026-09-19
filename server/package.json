@@ -6,9 +6,12 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {
+    "@google/genai": "^2.23.0",
+    "@prisma/client": "^5.22.0",
     "@shopify/shopify-api": "^11.14.0",
     "axios": "^1.15.0",
     "body-parser": "^1.20.3",
@@ -23,5 +26,8 @@
     "twilio": "^5.13.1",
     "uuid": "^13.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0"
   }
 }

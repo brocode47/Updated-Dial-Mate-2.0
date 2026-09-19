@@ -3,7 +3,7 @@ import express from 'express';
 import twilio from 'twilio';
 
 import { shopify } from '../lib/shopify.js';
-import { initDb, getDb, now, uid } from '../lib/db.js';
+import { prisma } from '../lib/db.js';
 import { verifyShopifyWebhook } from '../lib/webhookVerify.js';
 import { computeRiskScore } from '../lib/risk.js';
 
@@ -43,13 +43,13 @@ export async function registerWebhooksForShop({ shop, accessToken }) {
     }
   }
 
-  await initDb();
-  const db = getDb();
-
-  await db.run(
-    'INSERT INTO compliance_logs(id, shop, event, detail, createdAt) VALUES(?,?,?,?,?)',
-    [uid('log'), shop, 'Webhook registered', `orders/create + orders/updated -> ${baseUrl}`, now()]
-  );
+  await prisma.complianceLog.create({
+    data: {
+      shopDomain: shop,
+      event: 'Webhook registered',
+      detail: `orders/create + orders/updated -> ${baseUrl}`
+    }
+  });
 }
 
 // ===============================
@@ -83,6 +83,7 @@ async function handleOrderWebhook(req, res, topic) {
 
   const shop = req.get('X-Shopify-Shop-Domain');
   const hmac = req.get('X-Shopify-Hmac-Sha256');
+  const webhookId = req.get('X-Shopify-Webhook-Id');
   const secret = process.env.SHOPIFY_API_SECRET || process.env.SHOPIFY_WEBHOOK_SECRET;
 
   if (!secret) {
@@ -105,30 +106,65 @@ async function handleOrderWebhook(req, res, topic) {
 
   console.log('✅ Webhook verified');
 
+  const shopRecord = await prisma.shop.findUnique({ where: { domain: shop } });
+  if (!shopRecord) {
+    console.log('❌ Unknown shop');
+    return res.status(200).send('ok');
+  }
+
+  if (webhookId) {
+    // Idempotency check
+    const existingHook = await prisma.webhookEvent.findUnique({
+      where: { id: webhookId }
+    });
+    if (existingHook) {
+      console.log(`📦 Webhook ${webhookId} already processed, skipping.`);
+      return res.status(200).send('ok');
+    }
+
+    // Register webhook event
+    await prisma.webhookEvent.create({
+      data: {
+        id: webhookId,
+        shopId: shopRecord.id,
+        topic,
+        payload: rawBody,
+        processed: true
+      }
+    });
+  }
+
   const payload = JSON.parse(rawBody);
   const orderId = String(payload?.name || payload?.id);
   const shopifyOrderGid = payload?.admin_graphql_api_id;
 
-  await initDb();
-  const db = getDb();
-
   const riskScore = computeRiskScore(payload);
 
-  await db.run(
-    `INSERT INTO orders(id, shop, shopifyOrderGid, payload, createdAt, updatedAt, status, tag, riskScore)
- VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
- ON CONFLICT(id) DO UPDATE SET 
-   payload=excluded.payload,
-   shopifyOrderGid=excluded.shopifyOrderGid,
-   updatedAt=excluded.updatedAt,
-   riskScore=excluded.riskScore`,
-[orderId, shop, shopifyOrderGid, rawBody, now(), now(), 'Pending Confirmation', 'Retry', riskScore]
-  );
+  await prisma.order.upsert({
+    where: { id: orderId },
+    update: {
+      payload: rawBody,
+      shopifyOrderGid,
+      riskScore
+    },
+    create: {
+      id: orderId,
+      shopId: shopRecord.id,
+      shopifyOrderGid,
+      payload: rawBody,
+      status: 'Pending Confirmation',
+      tag: 'Retry',
+      riskScore
+    }
+  });
 
-  await db.run(
-    'INSERT INTO compliance_logs(id, shop, event, detail, createdAt) VALUES(?,?,?,?,?)',
-    [uid('log'), shop, 'Webhook verified', `${topic} accepted for ${orderId}`, now()]
-  );
+  await prisma.complianceLog.create({
+    data: {
+      shopDomain: shop,
+      event: 'Webhook verified',
+      detail: `${topic} accepted for ${orderId}`
+    }
+  });
 
   // ===============================
   // 📞 TRIGGER CALL (NON-BLOCKING ✅)

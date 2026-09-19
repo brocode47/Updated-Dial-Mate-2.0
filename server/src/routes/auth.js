@@ -2,7 +2,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { shopify, normalizeShop } from '../lib/shopify.js';
-import { getDb, initDb, now } from '../lib/db.js';
+import { prisma } from '../lib/db.js';
 import { registerWebhooksForShop } from './webhooks.js';
 
 export function authRouter() {
@@ -52,17 +52,17 @@ export function authRouter() {
       const shop = callbackRes.session.shop;
       const accessToken = callbackRes.session.accessToken;
 
-      // ✅ Save in DB
-      await initDb();
-      const db = getDb();
+      // ✅ Save in DB using Prisma
+      let org = await prisma.organization.findFirst();
+      if (!org) {
+        org = await prisma.organization.create({ data: { name: 'Default Organization' } });
+      }
 
-      await db.run(
-        `INSERT INTO shops(shop, accessToken, installedAt)
-         VALUES(?, ?, ?)
-         ON CONFLICT(shop)
-         DO UPDATE SET accessToken=excluded.accessToken, installedAt=excluded.installedAt`,
-        [shop, accessToken, now()]
-      );
+      await prisma.shop.upsert({
+        where: { domain: shop },
+        update: { accessToken, isActive: true },
+        create: { domain: shop, accessToken, organizationId: org.id }
+      });
 
       // ✅ Register webhooks
       await registerWebhooksForShop({ shop, accessToken });
@@ -81,10 +81,11 @@ export function authRouter() {
 
   // ✅ DEBUG ROUTE (check installed shops)
   router.get('/shops', async (_req, res) => {
-    await initDb();
-    const db = getDb();
-    const rows = await db.all('SELECT shop, installedAt FROM shops ORDER BY installedAt DESC');
-    return res.json({ shops: rows });
+    const shops = await prisma.shop.findMany({
+      orderBy: { installedAt: 'desc' },
+      select: { domain: true, installedAt: true, isActive: true }
+    });
+    return res.json({ shops });
   });
 
   return router;

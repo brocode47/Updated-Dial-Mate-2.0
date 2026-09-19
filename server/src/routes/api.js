@@ -1,26 +1,29 @@
 /* __imports_rewritten__ */
 import express from 'express';
 import { z } from 'zod';
-import { initDb, getDb, now, uid } from '../lib/db.js';
+import { prisma } from '../lib/db.js';
 import { placeOutboundCall } from '../calls/twilio.js';
+import { tenantMiddleware } from '../middleware/tenant.js';
+import crypto from 'crypto';
+import { config } from '../config/features.js';
 
 export function apiRouter() {
   const router = express.Router();
 
-  router.get('/shops/:shop/orders', async (req, res) => {
-    await initDb();
-    const db = getDb();
-    const shop = req.params.shop;
+  router.get('/features', (req, res) => {
+    return res.json(config);
+  });
 
-  const rows = await db.all(
-  `SELECT id, shop, status, tag, riskScore, updatedAt, payload,
-          callStatus, retryCount, whatsappSent
-   FROM orders
-   WHERE shop=?
-   ORDER BY updatedAt DESC
-   LIMIT 200`,
-  [shop]
-);
+  router.use('/shops/:shop', tenantMiddleware);
+
+  router.get('/shops/:shop/orders', async (req, res) => {
+    const shopRecord = req.shopRecord;
+
+    const rows = await prisma.order.findMany({
+      where: { shopId: shopRecord.id },
+      orderBy: { updatedAt: 'desc' },
+      take: 200
+    });
 
     const orders = rows.map((r) => {
       const payload = JSON.parse(r.payload);
@@ -52,27 +55,23 @@ export function apiRouter() {
   });
 
   router.get('/shops/:shop/calls', async (req, res) => {
-    await initDb();
-    const db = getDb();
-    const shop = req.params.shop;
+    const shopRecord = req.shopRecord;
 
-    const rows = await db.all(
-      'SELECT id, orderId, outcome, intent, sentiment, durationSec, recordingUrl, transcript, createdAt FROM calls WHERE shop=? ORDER BY createdAt DESC LIMIT 200',
-      [shop]
-    );
+    const rows = await prisma.call.findMany({
+      where: { shopId: shopRecord.id },
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
 
     return res.json({ calls: rows });
   });
 
   router.get('/shops/:shop/compliance', async (req, res) => {
-    await initDb();
-    const db = getDb();
-    const shop = req.params.shop;
-
-    const rows = await db.all(
-      'SELECT id, event, detail, createdAt FROM compliance_logs WHERE shop=? ORDER BY createdAt DESC LIMIT 200',
-      [shop]
-    );
+    const rows = await prisma.complianceLog.findMany({
+      where: { shopDomain: req.shopRecord.domain },
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
 
     return res.json({ logs: rows });
   });
@@ -88,19 +87,21 @@ export function apiRouter() {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
 
-    await initDb();
-    const db = getDb();
-    const { shop, orderId } = req.params;
+    const shopRecord = req.shopRecord;
+    const { orderId } = req.params;
 
-    await db.run(
-      'UPDATE orders SET status=?, tag=?, updatedAt=? WHERE shop=? AND id=?',
-      [parsed.data.status, parsed.data.tag, now(), shop, orderId]
-    );
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: parsed.data.status, tag: parsed.data.tag }
+    });
 
-    await db.run(
-      'INSERT INTO compliance_logs(id, shop, event, detail, createdAt) VALUES(?,?,?,?,?)',
-      [uid('log'), shop, 'Order tag update', `${orderId} -> ${parsed.data.tag}`, now()]
-    );
+    await prisma.complianceLog.create({
+      data: {
+        shopDomain: shopRecord.domain,
+        event: 'Order tag update',
+        detail: `${orderId} -> ${parsed.data.tag}`
+      }
+    });
 
     return res.json({ ok: true });
   });
@@ -117,14 +118,12 @@ export function apiRouter() {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
 
-    await initDb();
-    const db = getDb();
-    const { shop, orderId } = req.params;
+    const shopRecord = req.shopRecord;
+    const { orderId } = req.params;
 
-    const orderRow = await db.get(
-      'SELECT payload FROM orders WHERE shop=? AND id=?',
-      [shop, orderId]
-    );
+    const orderRow = await prisma.order.findUnique({
+      where: { id: orderId }
+    });
 
     if (!orderRow) {
       return res.status(404).json({ error: 'Order not found' });
@@ -160,7 +159,7 @@ export function apiRouter() {
       payload?.total_price ||
       '0';
 
-    const callId = uid('call');
+    const callId = crypto.randomUUID();
     let providerCallSid = null;
 
     if (parsed.data.mode === 'twilio') {
@@ -177,7 +176,7 @@ export function apiRouter() {
           `${baseUrl}/voice?name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
 
         const statusCallbackUrl =
-          `${baseUrl}/twilio/status?shop=${encodeURIComponent(shop)}&orderId=${encodeURIComponent(orderId)}&callId=${encodeURIComponent(callId)}`;
+          `${baseUrl}/twilio/status?shop=${encodeURIComponent(shopRecord.domain)}&orderId=${encodeURIComponent(orderId)}&callId=${encodeURIComponent(callId)}`;
 
         const resp = await placeOutboundCall({
           to: phone,
@@ -193,15 +192,24 @@ export function apiRouter() {
       }
     }
 
-    await db.run(
-      'INSERT INTO calls(id, shop, orderId, outcome, intent, sentiment, durationSec, recordingUrl, transcript, providerCallSid, createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-      [callId, shop, orderId, 'Queued', 'Confirmation', 'Unknown', null, null, null, providerCallSid, now()]
-    );
+    await prisma.call.create({
+      data: {
+        shopId: shopRecord.id,
+        orderId,
+        outcome: 'Queued',
+        intent: 'Confirmation',
+        sentiment: 'Unknown',
+        providerCallSid
+      }
+    });
 
-    await db.run(
-      'INSERT INTO compliance_logs(id, shop, event, detail, createdAt) VALUES(?,?,?,?,?)',
-      [uid('log'), shop, 'Call queued', `${orderId} -> ${phone} (${parsed.data.mode})`, now()]
-    );
+    await prisma.complianceLog.create({
+      data: {
+        shopDomain: shopRecord.domain,
+        event: 'Call queued',
+        detail: `${orderId} -> ${phone} (${parsed.data.mode})`
+      }
+    });
 
     return res.json({ ok: true, callId, providerCallSid });
   });
