@@ -1,0 +1,7 @@
+api.sundaybazaaar.com {
+    reverse_proxy api:8787
+}
+
+wa.sundaybazaaar.com {
+    reverse_proxy wa-akg:8787
+}

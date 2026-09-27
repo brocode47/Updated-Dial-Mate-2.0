@@ -1,0 +1,13 @@
+api.sundaybazaaar.com {
+    reverse_proxy api:8787
+}
+
+wa.sundaybazaaar.com {
+    reverse_proxy wa-akg:8787
+}
+
+app.sundaybazaaar.com {
+    root * /srv/frontend
+    try_files {path} /index.html
+    file_server
+}

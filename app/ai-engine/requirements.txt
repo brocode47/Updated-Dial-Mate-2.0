@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langgraph
+langchain
+langchain-community
+python-dotenv
+pydantic
+requests
+psycopg2-binary
+sqlalchemy

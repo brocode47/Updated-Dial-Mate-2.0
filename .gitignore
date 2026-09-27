@@ -1,0 +1,9 @@
+node_modules/
+venv/
+.env
+*.log
+__pycache__/
+*.pyc
+postgres_data/
+redis_data/
+dialmate_backup_before_antigravity.tar.gz

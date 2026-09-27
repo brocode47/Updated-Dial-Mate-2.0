@@ -1,0 +1,94 @@
+import psycopg2
+import os
+import uuid
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def get_connection():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
+
+
+def get_or_create_conversation(shop_id):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        '''
+        SELECT id
+        FROM "Conversation"
+        WHERE "shopId"=%s
+        AND status='ACTIVE'
+        ORDER BY "createdAt" DESC
+        LIMIT 1
+        ''',
+        (shop_id,)
+    )
+
+    conversation = cur.fetchone()
+
+    if conversation:
+        conversation_id = conversation[0]
+
+    else:
+        conversation_id = str(uuid.uuid4())
+        now = datetime.now()
+
+        cur.execute(
+            '''
+            INSERT INTO "Conversation"
+            (id, "shopId", "createdAt", "updatedAt")
+            VALUES (%s,%s,%s,%s)
+            ''',
+            (
+                conversation_id,
+                shop_id,
+                now,
+                now
+            )
+        )
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return conversation_id
+
+
+def save_message(shop_id, phone, message, sender="customer"):
+
+    conversation_id = get_or_create_conversation(shop_id)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        '''
+        INSERT INTO "Message"
+        (id, "conversationId", sender, text, "createdAt")
+        VALUES (%s,%s,%s,%s,%s)
+        ''',
+        (
+            str(uuid.uuid4()),
+            conversation_id,
+            sender,
+            message,
+            datetime.now()
+        )
+    )
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return conversation_id

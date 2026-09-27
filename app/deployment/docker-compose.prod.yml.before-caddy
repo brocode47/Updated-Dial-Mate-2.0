@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.7
+    container_name: traefik
+    restart: unless-stopped
+    environment:
+      - "DOCKER_API_VERSION=1.40"
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.waakg.address=:3000"
+      # --- UNCOMMENT BELOW FOR HTTPS/DOMAIN LATER ---
+      # - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      # - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      # - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      # - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      # - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "3000:3000"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      # - "traefik_certs:/letsencrypt" # Uncomment for HTTPS later
+    networks:
+      - traefik-public
+
+  db:
+    image: postgres:15-alpine
+    container_name: dialmate_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dialmate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dialmate}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  redis:
+    image: redis:alpine
+    container_name: dialmate_redis
+    restart: unless-stopped
+    environment:
+      - "DOCKER_API_VERSION=1.40"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+
+  wa-mysql:
+    image: mysql:8
+    container_name: wa_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${WA_MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${WA_MYSQL_DB:-wa_akg}
+    volumes:
+      - wa_mysql_data:/var/lib/mysql
+    networks:
+      - internal
+
+  api:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    container_name: dialmate_api
+    restart: unless-stopped
+    environment:
+      - "DOCKER_API_VERSION=1.40"
+    env_file:
+      - .env.prod
+    depends_on:
+      - db
+      - redis
+    networks:
+      - internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      # Route all traffic on port 80 to the API
+      - "traefik.http.routers.api.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=8787"
+      # --- UNCOMMENT BELOW FOR HTTPS/DOMAIN LATER ---
+      # - "traefik.http.routers.api.entrypoints=websecure"
+      # - "traefik.http.routers.api.tls.certresolver=myresolver"
+
+  worker:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    container_name: dialmate_worker
+    restart: unless-stopped
+    environment:
+      - "DOCKER_API_VERSION=1.40"
+    command: ["npm", "run", "worker"]
+    env_file:
+      - .env.prod
+    depends_on:
+      - db
+      - redis
+    networks:
+      - internal
+
+  wa-akg:
+    build:
+      context: ../wa-akg
+      dockerfile: Dockerfile
+    container_name: wa_akg_app
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      - DATABASE_URL=mysql://root:${WA_MYSQL_PASSWORD}@wa-mysql:3306/${WA_MYSQL_DB:-wa_akg}
+      - HOSTNAME=0.0.0.0
+    depends_on:
+      - wa-mysql
+    volumes:
+      - wa_akg_sessions:/app/data
+    networks:
+      - internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      # Route traffic on port 3000 to WA-AKG
+      - "traefik.http.routers.waakg.rule=Host(`${WA_AKG_DOMAIN}`)"
+      - "traefik.http.routers.waakg.entrypoints=waakg"
+      - "traefik.http.services.waakg.loadbalancer.server.port=3000"
+      # --- UNCOMMENT BELOW FOR HTTPS/DOMAIN LATER ---
+      # - "traefik.http.routers.waakg.entrypoints=websecure"
+      # - "traefik.http.routers.waakg.tls.certresolver=myresolver"
+
+volumes:
+  traefik_certs:
+  postgres_data:
+  redis_data:
+  wa_mysql_data:
+  wa_akg_sessions:
+
+networks:
+  traefik-public:
+  internal:
