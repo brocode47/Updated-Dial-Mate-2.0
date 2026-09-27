@@ -4,6 +4,22 @@ venv/
 *.log
 __pycache__/
 *.pyc
-postgres_data/
-redis_data/
-dialmate_backup_before_antigravity.tar.gz
+
+# backups
+*.tar.gz
+*.zip
+
+# old projects
+app-old/
+app-new/
+
+# AI tool folders
+.agents/
+.claude/
+.cursor/
+.devin/
+
+app/**/.agents/
+app/**/.claude/
+app/**/.cursor/
+app/**/.devin/
