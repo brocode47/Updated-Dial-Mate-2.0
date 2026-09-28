@@ -14,25 +14,32 @@ def supervisor_agent(message: str, context: dict = None):
     history = context.get("history", [])
     customer_memory = context.get("customer_memory", {})
 
-    # 1. Prepare history context
+    # 1. Prepare history context (Limit to last 3 messages to avoid large prompts)
+    recent_history = history[-3:] if len(history) > 3 else history
     history_context = ""
-    if history:
-        for msg in reversed(history):
-            role = msg.get("role", "customer")
-            history_context += f"{role.capitalize()}: {msg['content']}\n"
+    for msg in reversed(recent_history):
+        role = msg.get("role", "customer")
+        content = msg.get("content", "")
+        # Truncate overly long individual messages
+        if len(content) > 150:
+            content = content[:147] + "..."
+        history_context += f"{role.capitalize()}: {content}\n"
             
-    # 1b. Prepare customer intelligence
+    # 1b. Prepare small customer intelligence summary
     customer_intel = ""
     if customer_memory:
-        customer_intel += "\nCustomer Intelligence:\n"
-        if customer_memory.get("preferred_categories"):
-            customer_intel += f"- Preferred Categories: {customer_memory['preferred_categories']}\n"
-        if customer_memory.get("preferred_products"):
-            customer_intel += f"- Preferred Products: {customer_memory['preferred_products']}\n"
-        if customer_memory.get("average_budget") is not None:
-            customer_intel += f"- Average Budget: {customer_memory['average_budget']}\n"
-        if customer_memory.get("preferences"):
-            customer_intel += f"- General Preferences: {customer_memory['preferences']}\n"
+        prefs = customer_memory.get("preferences", "")
+        cats = customer_memory.get("preferred_categories", "")
+        
+        # Keep summary extremely short for supervisor
+        summary = []
+        if cats:
+            summary.append(f"Prefers {cats[:50]}")
+        if prefs:
+            summary.append(f"Notes: {prefs[:50]}")
+            
+        if summary:
+            customer_intel = f"\nCustomer Summary: {', '.join(summary)}"
 
     # 2. Define stronger system prompt
     system_prompt = f"""You are an intent routing supervisor. Your ONLY job is to classify the customer's intent into a JSON object.
@@ -50,12 +57,18 @@ Example output format:
  "intent": "product_recommendation",
  "action": "product_search",
  "priority": "normal"
-}}
-{customer_intel}
-"""
+}}{customer_intel}"""
 
     human_prompt = f"History:\n{history_context}\nCurrent Message: {message}"
     
+    # Calculate sizes for logging
+    prompt_chars = len(system_prompt) + len(human_prompt)
+    mem_size = len(customer_intel)
+    print(f"[LLM Supervisor]")
+    print(f"Context characters: {prompt_chars}")
+    print(f"History messages: {len(recent_history)}")
+    print(f"Customer memory size: {mem_size}")
+
     # 3. Call LLM with configured timeout and fallback
     error_msg = None
     try:
