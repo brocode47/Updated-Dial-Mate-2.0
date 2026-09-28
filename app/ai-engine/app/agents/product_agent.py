@@ -5,7 +5,7 @@ def product_agent(message, history=None):
 
     text = message.lower()
     if history:
-        for msg in history:
+        for msg in reversed(history):
             if msg.get("role") == "customer":
                 text += " " + msg["content"].lower()
                 break

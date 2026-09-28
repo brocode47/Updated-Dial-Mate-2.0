@@ -100,7 +100,7 @@ def supervisor_agent(message: str, history: list = None):
 
     # Context fallback
     if history:
-        for msg in history:
+        for msg in reversed(history):
             if msg.get("role") == "customer":
                 # Determine intent of previous message
                 fallback_decision = supervisor_agent(msg["content"], history=None)
