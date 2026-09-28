@@ -107,8 +107,35 @@ def run_tests():
     else:
         print("FAIL: Support escalation failed.")
 
+    print("\n--- Test G: Customer Intelligence Profile Memory ---")
+    # Manually insert memory for Customer A
+    try:
+        from app.memory.profile import update_customer_profile
+        update_customer_profile(shop_id, customer_a_id, {
+            "preferredCategories": "perfumes",
+            "averageBudget": 5000,
+            "customerPreferences": "Prefers elegant premium gifts"
+        })
+        resp_g1 = main_agent("gift suggest karein", phone=phone_a, shop_id=shop_id)
+        print(f"Personalized Response for Customer A: {resp_g1['response'][:100]}...")
+        if "perfume" in resp_g1['response'].lower() or "5000" in resp_g1['response'].lower():
+            print("PASS: Customer with memory received personalized response.")
+        else:
+            print("FAIL: Customer A did not receive expected personalization.")
+            
+        # Test Customer B (no memory)
+        resp_g2 = main_agent("gift suggest karein", phone=phone_b, shop_id=shop_id)
+        print(f"Generic Response for Customer B: {resp_g2['response'][:100]}...")
+        if "perfume" not in resp_g2['response'].lower() and "5000" not in resp_g2['response'].lower():
+            print("PASS: Customer without memory received generic response.")
+        else:
+            print("FAIL: Customer B received someone else's memory!")
+    except Exception as e:
+        print(f"FAIL: Test G Error - {e}")
+
     # Cleanup
     try:
+        cur.execute('DELETE FROM "CustomerProfileMemory" WHERE "customerId" IN (%s, %s)', (customer_a_id, customer_b_id))
         cur.execute('DELETE FROM "Message" WHERE "conversationId" IN (%s, %s)', (conv_a1, conv_b1))
         cur.execute('DELETE FROM "Conversation" WHERE id IN (%s, %s)', (conv_a1, conv_b1))
         cur.execute('DELETE FROM "Customer" WHERE id IN (%s, %s)', (customer_a_id, customer_b_id))

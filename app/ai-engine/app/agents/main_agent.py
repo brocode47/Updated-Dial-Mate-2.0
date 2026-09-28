@@ -10,6 +10,7 @@ from app.tools.customer_tools import get_customer_order_by_phone
 from app.memory.db_memory import save_message, get_customer_id_by_phone, log_ai_interaction
 from app.memory.history import get_conversation_history
 from app.memory.extractor import extract_and_store_customer_memory_async
+from app.memory.context import get_customer_context
 
 
 def main_agent(message, order_id=None, phone=None, shop_id=None):
@@ -17,11 +18,15 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
     history = None
     conversation_id = None
     customer_id = None
+    customer_memory = None
+    previous_orders = []
     
     if shop_id:
         history = get_conversation_history(shop_id, phone)
         conversation_id = save_message(shop_id, phone, message, "customer")
         customer_id = get_customer_id_by_phone(shop_id, phone)
+        if customer_id:
+            customer_memory = get_customer_context(shop_id, customer_id)
 
     if not order_id and phone:
 
@@ -29,9 +34,15 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
 
         if customer_order:
             order_id = customer_order["order_id"]
+            previous_orders.append(customer_order)
 
+    context = {
+        "history": history or [],
+        "customer_memory": customer_memory or {},
+        "previous_orders": previous_orders
+    }
 
-    decision = route_message(message, history)
+    decision = route_message(message, context)
     
     if shop_id:
         log_ai_interaction(
@@ -58,7 +69,8 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
 
         result = support_agent(
             intent,
-            message
+            message,
+            context
         )
 
         response = result["response"]
@@ -128,7 +140,7 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
 
     elif agent in ["product_agent", "sales_agent"]:
 
-        result = product_agent(message, history)
+        result = product_agent(message, context)
 
         response = result["message"]
 

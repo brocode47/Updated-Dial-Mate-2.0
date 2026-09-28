@@ -7,7 +7,13 @@ import concurrent.futures
 def _call_llm(messages):
     return llm.invoke(messages)
 
-def supervisor_agent(message: str, history: list = None):
+def supervisor_agent(message: str, context: dict = None):
+    if context is None:
+        context = {"history": [], "customer_memory": {}, "previous_orders": []}
+        
+    history = context.get("history", [])
+    customer_memory = context.get("customer_memory", {})
+
     # 1. Prepare history context
     history_context = ""
     if history:
@@ -15,8 +21,21 @@ def supervisor_agent(message: str, history: list = None):
             role = msg.get("role", "customer")
             history_context += f"{role.capitalize()}: {msg['content']}\n"
             
+    # 1b. Prepare customer intelligence
+    customer_intel = ""
+    if customer_memory:
+        customer_intel += "\nCustomer Intelligence:\n"
+        if customer_memory.get("preferred_categories"):
+            customer_intel += f"- Preferred Categories: {customer_memory['preferred_categories']}\n"
+        if customer_memory.get("preferred_products"):
+            customer_intel += f"- Preferred Products: {customer_memory['preferred_products']}\n"
+        if customer_memory.get("average_budget") is not None:
+            customer_intel += f"- Average Budget: {customer_memory['average_budget']}\n"
+        if customer_memory.get("preferences"):
+            customer_intel += f"- General Preferences: {customer_memory['preferences']}\n"
+
     # 2. Define stronger system prompt
-    system_prompt = """You are an intent routing supervisor. Your ONLY job is to classify the customer's intent into a JSON object.
+    system_prompt = f"""You are an intent routing supervisor. Your ONLY job is to classify the customer's intent into a JSON object.
 NEVER perform database actions. NEVER write conversational responses.
 Allowed agents MUST be EXACTLY one of:
 - product_agent (gift, recommendation, buy, pricing)
@@ -26,12 +45,14 @@ Allowed agents MUST be EXACTLY one of:
 
 Return ONLY valid JSON. No markdown formatting. No markdown backticks. No explanations.
 Example output format:
-{
+{{
  "agent": "product_agent",
  "intent": "product_recommendation",
  "action": "product_search",
  "priority": "normal"
-}"""
+}}
+{customer_intel}
+"""
 
     human_prompt = f"History:\n{history_context}\nCurrent Message: {message}"
     
@@ -103,7 +124,7 @@ Example output format:
         print(f"[LLM Supervisor Fallback] Error: {e}")
 
     # 5. Fallback to robust keyword routing if LLM fails
-    fallback_decision = keyword_supervisor_agent(message, history)
+    fallback_decision = keyword_supervisor_agent(message, context)
     fallback_decision["model_used"] = None
     fallback_decision["used_llm"] = False
     fallback_decision["fallback_used"] = True
@@ -112,8 +133,11 @@ Example output format:
     fallback_decision["error_message"] = error_msg
     return fallback_decision
 
-def keyword_supervisor_agent(message: str, history: list = None):
+def keyword_supervisor_agent(message: str, context: dict = None):
     text = message.lower()
+    if context is None:
+        context = {"history": [], "customer_memory": {}}
+    history = context.get("history", [])
     
     if any(word in text for word in ["boss", "owner", "malik", "manager", "management", "baat karwao", "contact", "insan se baat", "real person", "customer care"]):
         return {"agent": "support_agent", "intent": "owner_request", "action": "escalate", "priority": "medium"}
@@ -134,7 +158,7 @@ def keyword_supervisor_agent(message: str, history: list = None):
     if history:
         for msg in reversed(history):
             if msg.get("role") == "customer":
-                fallback_decision = keyword_supervisor_agent(msg["content"], history=None)
+                fallback_decision = keyword_supervisor_agent(msg["content"], context={"history": None})
                 if fallback_decision["intent"] != "general_question":
                     return fallback_decision
                 break
