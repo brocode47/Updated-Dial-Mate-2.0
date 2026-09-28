@@ -28,36 +28,38 @@ model User {
 }
 
 model Shop {
-  id                   String                @id @default(uuid())
-  organizationId       String
-  domain               String                @unique
-  accessToken          String?
-  isActive             Boolean               @default(true)
-  installedAt          DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  calls                Call[]
-  conversations        Conversation[]
-  customers            Customer[]
-  orders               Order[]
-  organization         Organization          @relation(fields: [organizationId], references: [id])
-  webhooks             WebhookEvent[]
-  whatsAppIntegrations WhatsAppIntegration[]
-  products             Product[]
+  id                    String                  @id @default(uuid())
+  organizationId        String
+  domain                String                  @unique
+  accessToken           String?
+  isActive              Boolean                 @default(true)
+  installedAt           DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  calls                 Call[]
+  conversations         Conversation[]
+  customers             Customer[]
+  orders                Order[]
+  organization          Organization            @relation(fields: [organizationId], references: [id])
+  webhooks              WebhookEvent[]
+  whatsAppIntegrations  WhatsAppIntegration[]
+  products              Product[]
+  CustomerProfileMemory CustomerProfileMemory[]
 }
 
 model Customer {
-  id            String         @id @default(uuid())
+  id            String                 @id @default(uuid())
   shopId        String
   shopifyId     String?
   phone         String?
   email         String?
   firstName     String?
   lastName      String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
   conversations Conversation[]
-  shop          Shop           @relation(fields: [shopId], references: [id])
+  shop          Shop                   @relation(fields: [shopId], references: [id])
   orders        Order[]
+  profileMemory CustomerProfileMemory?
 }
 
 model Order {
@@ -197,4 +199,25 @@ model AIInteractionLog {
   @@index([shopId])
   @@index([customerId])
   @@index([conversationId])
+}
+
+model CustomerProfileMemory {
+  id                  String   @id @default(uuid())
+  customerId          String   @unique
+  shopId              String
+  preferredCategories String?
+  preferredProducts   String?
+  averageBudget       Float?
+  purchaseFrequency   String?
+  lastPurchaseSummary String?
+  customerPreferences String?
+  interactionSummary  String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  shop     Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([shopId])
 }

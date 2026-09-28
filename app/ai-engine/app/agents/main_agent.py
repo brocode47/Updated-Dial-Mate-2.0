@@ -9,6 +9,7 @@ from app.tools.customer_tools import get_customer_order_by_phone
 
 from app.memory.db_memory import save_message, get_customer_id_by_phone, log_ai_interaction
 from app.memory.history import get_conversation_history
+from app.memory.extractor import extract_and_store_customer_memory_async
 
 
 def main_agent(message, order_id=None, phone=None, shop_id=None):
@@ -148,7 +149,9 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
             response,
             "assistant"
         )
-
+        
+        if customer_id:
+            extract_and_store_customer_memory_async(shop_id, customer_id, history, message)
 
     return {
         "type": "conversation",
