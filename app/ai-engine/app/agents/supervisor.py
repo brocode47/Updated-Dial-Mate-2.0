@@ -1,6 +1,7 @@
 import json
+import time
 from app.models.llm import llm
-
+from app.config import AI_MODEL, LLM_TIMEOUT_SECONDS
 import concurrent.futures
 
 def _call_llm(messages):
@@ -34,20 +35,27 @@ Example output format:
 
     human_prompt = f"History:\n{history_context}\nCurrent Message: {message}"
     
-    # 3. Call LLM with 3-second timeout and fallback
+    # 3. Call LLM with configured timeout and fallback
     try:
+        print(f"[LLM Supervisor] Using model: {AI_MODEL}")
+        print(f"[LLM Supervisor] Timeout configured: {LLM_TIMEOUT_SECONDS} seconds")
+        
         messages_payload = [
             ("system", system_prompt),
             ("human", human_prompt)
         ]
         
-        # Enforce 3-second hard timeout without blocking on exit
+        # Enforce hard timeout without blocking on exit
+        start_time = time.time()
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
             future = executor.submit(_call_llm, messages_payload)
-            response = future.result(timeout=3.0)
+            response = future.result(timeout=LLM_TIMEOUT_SECONDS)
         finally:
             executor.shutdown(wait=False)
+            
+        elapsed_time = time.time() - start_time
+        print(f"[LLM Supervisor] LLM response received in {elapsed_time:.2f} seconds")
         
         content = response.content.strip()
         # Clean up markdown formatting if present
@@ -77,7 +85,7 @@ Example output format:
         return decision
             
     except concurrent.futures.TimeoutError:
-        print("[LLM Supervisor] Timeout exceeded (>3s). Falling back to keyword routing.")
+        print(f"[LLM Supervisor] Timeout exceeded (>{LLM_TIMEOUT_SECONDS}s). Falling back to keyword routing.")
     except json.JSONDecodeError:
         print("[LLM Supervisor] Invalid JSON returned. Falling back to keyword routing.")
     except Exception as e:

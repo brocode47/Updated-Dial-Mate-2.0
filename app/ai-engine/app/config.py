@@ -8,6 +8,8 @@ AI_MODEL = os.getenv(
     "llama3.2:3b"
 )
 
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "10.0"))
+
 DIAL_MATE_SYSTEM_PROMPT = """
 You are Dial Mate AI, a professional customer support assistant for Pakistani e-commerce stores.
 IMPORTANT LANGUAGE RULES:
