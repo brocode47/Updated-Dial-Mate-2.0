@@ -36,6 +36,7 @@ Example output format:
     human_prompt = f"History:\n{history_context}\nCurrent Message: {message}"
     
     # 3. Call LLM with configured timeout and fallback
+    error_msg = None
     try:
         print(f"[LLM Supervisor] Using model: {AI_MODEL}")
         print(f"[LLM Supervisor] Timeout configured: {LLM_TIMEOUT_SECONDS} seconds")
@@ -82,17 +83,34 @@ Example output format:
         if agent_name == "sales_agent":
             decision["agent"] = "product_agent"
             
+        decision["model_used"] = AI_MODEL
+        decision["used_llm"] = True
+        decision["fallback_used"] = False
+        decision["response_time_ms"] = int(elapsed_time * 1000)
+        decision["status"] = "SUCCESS"
+        decision["error_message"] = None
+            
         return decision
             
     except concurrent.futures.TimeoutError:
-        print(f"[LLM Supervisor] Timeout exceeded (>{LLM_TIMEOUT_SECONDS}s). Falling back to keyword routing.")
+        error_msg = f"Timeout exceeded (>{LLM_TIMEOUT_SECONDS}s)"
+        print(f"[LLM Supervisor] {error_msg}. Falling back to keyword routing.")
     except json.JSONDecodeError:
-        print("[LLM Supervisor] Invalid JSON returned. Falling back to keyword routing.")
+        error_msg = "Invalid JSON returned"
+        print(f"[LLM Supervisor] {error_msg}. Falling back to keyword routing.")
     except Exception as e:
+        error_msg = str(e)
         print(f"[LLM Supervisor Fallback] Error: {e}")
 
     # 5. Fallback to robust keyword routing if LLM fails
-    return keyword_supervisor_agent(message, history)
+    fallback_decision = keyword_supervisor_agent(message, history)
+    fallback_decision["model_used"] = None
+    fallback_decision["used_llm"] = False
+    fallback_decision["fallback_used"] = True
+    fallback_decision["response_time_ms"] = 0
+    fallback_decision["status"] = "FALLBACK"
+    fallback_decision["error_message"] = error_msg
+    return fallback_decision
 
 def keyword_supervisor_agent(message: str, history: list = None):
     text = message.lower()

@@ -61,28 +61,28 @@ model Customer {
 }
 
 model Order {
-  id              String    @id @default(uuid())
-  shopId          String
-  customerId      String?
-  shopifyOrderGid String?
-  orderNumber     String?
-  payload         String?
-  status          String    @default("Pending Confirmation")
-  tag             String?
-  riskScore       Float?    @default(0.0)
-  retryCount      Int       @default(0)
-  callStatus      String    @default("pending")
-  callSid         String?
-  lastCallAt      DateTime?
-  totalAmount     Float?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  calls           Call[]
-  customer        Customer? @relation(fields: [customerId], references: [id])
-  shop            Shop      @relation(fields: [shopId], references: [id])
-  courierName     String?
-  trackingNumber  String?
-  trackingStatus  String?
+  id               String    @id @default(uuid())
+  shopId           String
+  customerId       String?
+  shopifyOrderGid  String?
+  orderNumber      String?
+  payload          String?
+  status           String    @default("Pending Confirmation")
+  tag              String?
+  riskScore        Float?    @default(0.0)
+  retryCount       Int       @default(0)
+  callStatus       String    @default("pending")
+  callSid          String?
+  lastCallAt       DateTime?
+  totalAmount      Float?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  calls            Call[]
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  shop             Shop      @relation(fields: [shopId], references: [id])
+  courierName      String?
+  trackingNumber   String?
+  trackingStatus   String?
   trackingLocation String?
   expectedDelivery String?
 }
@@ -159,6 +159,7 @@ model WhatsAppIntegration {
   @@index([shopId])
   @@index([isActive])
 }
+
 model Product {
   id          String   @id @default(uuid())
   shopId      String
@@ -174,4 +175,26 @@ model Product {
 
   @@index([shopId])
   @@index([category])
+}
+
+model AIInteractionLog {
+  id             String   @id @default(uuid())
+  shopId         String?
+  customerId     String?
+  conversationId String?
+  userMessage    String
+  detectedAgent  String
+  intent         String
+  action         String
+  modelUsed      String?
+  usedLLM        Boolean  @default(false)
+  fallbackUsed   Boolean  @default(false)
+  responseTimeMs Int
+  status         String
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  @@index([shopId])
+  @@index([customerId])
+  @@index([conversationId])
 }

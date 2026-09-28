@@ -113,3 +113,67 @@ def save_message(shop_id, phone, message, sender="customer"):
     conn.close()
 
     return conversation_id
+
+def get_customer_id_by_phone(shop_id, phone):
+    if not phone:
+        return None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM "Customer" WHERE "shopId"=%s AND phone=%s', (shop_id, phone))
+        customer_row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if customer_row:
+            return customer_row[0]
+    except Exception as e:
+        print(f"[DB Error] Failed to get customer id: {e}")
+    return None
+
+def log_ai_interaction(
+    shop_id,
+    customer_id,
+    conversation_id,
+    user_message,
+    detected_agent,
+    intent,
+    action,
+    model_used,
+    used_llm,
+    fallback_used,
+    response_time_ms,
+    status,
+    error_message
+):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO "AIInteractionLog"
+            (id, "shopId", "customerId", "conversationId", "userMessage", "detectedAgent", intent, action, "modelUsed", "usedLLM", "fallbackUsed", "responseTimeMs", status, "errorMessage", "createdAt")
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ''',
+            (
+                str(uuid.uuid4()),
+                shop_id,
+                customer_id,
+                conversation_id,
+                user_message,
+                detected_agent,
+                intent,
+                action,
+                model_used,
+                used_llm,
+                fallback_used,
+                response_time_ms,
+                status,
+                error_message,
+                datetime.now()
+            )
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[Logging Error] Failed to log AI interaction: {e}")
