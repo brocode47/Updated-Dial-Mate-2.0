@@ -5,10 +5,16 @@ load_dotenv()
 
 AI_MODEL = os.getenv(
     "AI_MODEL",
-    "llama3.2:3b"
+    "qwen2.5:1.5b"
 )
 
-LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "10.0"))
+# Supervisor routing mode: "keyword" (fast, deterministic) or "llm" (slower, AI-powered)
+SUPERVISOR_MODE = os.getenv("SUPERVISOR_MODE", "keyword")
+
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "45.0"))
+
+# Response generation model (can differ from routing model)
+RESPONSE_MODEL = os.getenv("RESPONSE_MODEL", AI_MODEL)
 
 DIAL_MATE_SYSTEM_PROMPT = """
 You are Dial Mate AI, a professional customer support assistant for Pakistani e-commerce stores.
