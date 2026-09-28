@@ -1,4 +1,4 @@
-def supervisor_agent(message: str):
+def supervisor_agent(message: str, history: list = None):
 
     text = message.lower()
 
@@ -97,6 +97,16 @@ def supervisor_agent(message: str):
             "priority": "normal"
         }
 
+
+    # Context fallback
+    if history:
+        for msg in history:
+            if msg.get("role") == "customer":
+                # Determine intent of previous message
+                fallback_decision = supervisor_agent(msg["content"], history=None)
+                if fallback_decision["intent"] != "general_question":
+                    return fallback_decision
+                break
 
     # General conversation
     return {

@@ -85,6 +85,28 @@ def run_tests():
     else:
         print("FAIL: Order flow failed.")
 
+    print("\n--- Test E: Multi-turn Context ---")
+    resp_e1 = main_agent("Mujhe gift chahiye", phone=phone_a, shop_id=shop_id)
+    print(f"User: Mujhe gift chahiye")
+    print(f"AI: {resp_e1['response'][:50]}...")
+    
+    resp_e2 = main_agent("Birthday", phone=phone_a, shop_id=shop_id)
+    print(f"User: Birthday")
+    print(f"AI: {resp_e2['response'][:50]}...")
+    
+    if "budget" in resp_e2["response"] or "options available" in resp_e2["response"]:
+        print("PASS: Context injection works.")
+    else:
+        print("FAIL: Context injection failed.")
+
+    print("\n--- Test F: Support Escalation ---")
+    resp_f = main_agent("Tumhara boss kon hai", phone=phone_a, shop_id=shop_id)
+    print(f"Response: {resp_f}")
+    if resp_f and "management ya owner" in resp_f["response"]:
+        print("PASS: Support escalation executes.")
+    else:
+        print("FAIL: Support escalation failed.")
+
     # Cleanup
     try:
         cur.execute('DELETE FROM "Message" WHERE "conversationId" IN (%s, %s)', (conv_a1, conv_b1))

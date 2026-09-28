@@ -8,11 +8,14 @@ from app.tools.order_tools import get_order
 from app.tools.customer_tools import get_customer_order_by_phone
 
 from app.memory.db_memory import save_message
+from app.memory.history import get_conversation_history
 
 
 def main_agent(message, order_id=None, phone=None, shop_id=None):
 
+    history = None
     if shop_id:
+        history = get_conversation_history(shop_id, phone)
         save_message(shop_id, phone, message, "customer")
 
 
@@ -24,7 +27,7 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
             order_id = customer_order["order_id"]
 
 
-    decision = route_message(message)
+    decision = route_message(message, history)
 
     agent = decision["agent"]
     intent = decision["intent"]
@@ -104,7 +107,7 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
 
     elif agent in ["product_agent", "sales_agent"]:
 
-        result = product_agent(message)
+        result = product_agent(message, history)
 
         response = result["message"]
 

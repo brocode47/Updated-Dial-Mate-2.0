@@ -1,9 +1,14 @@
 from app.tools.product_tools import search_products
 
 
-def product_agent(message):
+def product_agent(message, history=None):
 
     text = message.lower()
+    if history:
+        for msg in history:
+            if msg.get("role") == "customer":
+                text += " " + msg["content"].lower()
+                break
 
     products = []
 
