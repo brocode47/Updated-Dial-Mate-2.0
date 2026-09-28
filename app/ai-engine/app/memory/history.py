@@ -14,23 +14,44 @@ def get_connection():
     )
 
 
-def get_conversation_history(shop_id):
+def get_conversation_history(shop_id, phone=None):
 
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute(
-        '''
-        SELECT m.sender, m.text
-        FROM "Message" m
-        JOIN "Conversation" c
-        ON m."conversationId" = c.id
-        WHERE c."shopId"=%s
-        ORDER BY m."createdAt" DESC
-        LIMIT 5
-        ''',
-        (shop_id,)
-    )
+    customer_id = None
+    if phone:
+        cur.execute('SELECT id FROM "Customer" WHERE "shopId"=%s AND phone=%s', (shop_id, phone))
+        customer_row = cur.fetchone()
+        if customer_row:
+            customer_id = customer_row[0]
+
+    if customer_id:
+        cur.execute(
+            '''
+            SELECT m.sender, m.text
+            FROM "Message" m
+            JOIN "Conversation" c
+            ON m."conversationId" = c.id
+            WHERE c."shopId"=%s AND c."customerId"=%s
+            ORDER BY m."createdAt" DESC
+            LIMIT 10
+            ''',
+            (shop_id, customer_id)
+        )
+    else:
+        cur.execute(
+            '''
+            SELECT m.sender, m.text
+            FROM "Message" m
+            JOIN "Conversation" c
+            ON m."conversationId" = c.id
+            WHERE c."shopId"=%s AND c."customerId" IS NULL
+            ORDER BY m."createdAt" DESC
+            LIMIT 10
+            ''',
+            (shop_id,)
+        )
 
     rows = cur.fetchall()
 

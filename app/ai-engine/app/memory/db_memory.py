@@ -16,22 +16,42 @@ def get_connection():
     )
 
 
-def get_or_create_conversation(shop_id):
+def get_or_create_conversation(shop_id, phone=None):
 
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute(
-        '''
-        SELECT id
-        FROM "Conversation"
-        WHERE "shopId"=%s
-        AND status='ACTIVE'
-        ORDER BY "createdAt" DESC
-        LIMIT 1
-        ''',
-        (shop_id,)
-    )
+    customer_id = None
+    if phone:
+        cur.execute('SELECT id FROM "Customer" WHERE "shopId"=%s AND phone=%s', (shop_id, phone))
+        customer_row = cur.fetchone()
+        if customer_row:
+            customer_id = customer_row[0]
+
+    if customer_id:
+        cur.execute(
+            '''
+            SELECT id
+            FROM "Conversation"
+            WHERE "shopId"=%s AND "customerId"=%s
+            AND status='ACTIVE'
+            ORDER BY "createdAt" DESC
+            LIMIT 1
+            ''',
+            (shop_id, customer_id)
+        )
+    else:
+        cur.execute(
+            '''
+            SELECT id
+            FROM "Conversation"
+            WHERE "shopId"=%s AND "customerId" IS NULL
+            AND status='ACTIVE'
+            ORDER BY "createdAt" DESC
+            LIMIT 1
+            ''',
+            (shop_id,)
+        )
 
     conversation = cur.fetchone()
 
@@ -45,12 +65,13 @@ def get_or_create_conversation(shop_id):
         cur.execute(
             '''
             INSERT INTO "Conversation"
-            (id, "shopId", "createdAt", "updatedAt")
-            VALUES (%s,%s,%s,%s)
+            (id, "shopId", "customerId", "createdAt", "updatedAt")
+            VALUES (%s,%s,%s,%s,%s)
             ''',
             (
                 conversation_id,
                 shop_id,
+                customer_id,
                 now,
                 now
             )
@@ -66,7 +87,7 @@ def get_or_create_conversation(shop_id):
 
 def save_message(shop_id, phone, message, sender="customer"):
 
-    conversation_id = get_or_create_conversation(shop_id)
+    conversation_id = get_or_create_conversation(shop_id, phone)
 
     conn = get_connection()
     cur = conn.cursor()
