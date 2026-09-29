@@ -1,6 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
-from app.models.llm import llm
+from app.models.llm import safe_llm_invoke
 from app.memory.profile import update_customer_profile
 
 executor = ThreadPoolExecutor(max_workers=2)
@@ -47,10 +47,12 @@ def _extract_and_store_sync(shop_id, customer_id, history, message):
         Output: {{"preferredCategories": null, "preferredProducts": null, "averageBudget": 5000, "customerPreferences": null}}
         """
         
-        # In a real setup, you might want a faster model for this extraction, e.g. qwen2.5:1.5b.
-        # But we'll use the default llm object.
-        response = llm.invoke(prompt)
-        content = response.content.strip()
+        # Use safe_llm_invoke with timeout protection (10s max for background extraction)
+        content = safe_llm_invoke([("human", prompt)], timeout_seconds=10)
+        
+        if content is None:
+            print("[Memory Extractor] LLM unavailable, skipping memory extraction")
+            return
         
         # Clean up JSON if necessary
         if content.startswith('```json'):
