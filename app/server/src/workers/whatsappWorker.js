@@ -1,130 +1,119 @@
 import { WhatsAppClient } from '../integrations/whatsapp/client.js';
-import { generateContent, getAIClient } from '../integrations/ai/client.js';
-import { getPrompt } from '../integrations/ai/prompts.js';
-import { AITools } from '../integrations/ai/tools.js';
-import { dispatchToolCall } from '../integrations/ai/dispatcher.js';
 import { prisma } from '../lib/db.js';
-import { ChatStateService } from '../services/chatState.js';
 
 const waClient = new WhatsAppClient();
 
+/**
+ * Process inbound WhatsApp message:
+ * WhatsApp Message → BullMQ Worker → Python AI Engine (POST /chat) → Send Response
+ * 
+ * Features:
+ * - 5-second AbortController timeout protection
+ * - Zero LLM routing in worker (handled deterministically by AI Engine)
+ * - Multi-tenant isolation by shopId + customer_phone
+ * - Never crashes the BullMQ worker process
+ */
 export async function processWhatsAppJob(job) {
   const { shopDomain, sessionId, payload } = job.data;
-  
+  let shopId = job.data.shopId;
+
   // payload is from WA-AKG webhook: { key: { id, remoteJid }, content, type, fileUrl }
   const jid = payload.key?.remoteJid;
   const messageType = payload.type;
-  const messageText = payload.content || '';
-  const fileUrl = payload.fileUrl;
-  
+  let messageText = payload.content || '';
+
   if (!jid || jid.includes('@g.us')) {
-    // Ignore group messages or malformed
+    // Ignore group messages or malformed payloads
     return { success: true, ignored: true };
   }
 
-  console.log(`dY" [WhatsAppWorker] Processing message from ${jid} for shop ${shopDomain}`);
+  console.log(`💬 [WhatsAppWorker] Processing message from ${jid} for shop ${shopDomain}`);
 
   try {
-    // 1. Prepare parts for Gemini
-    const parts = [];
-
-    if (messageType === 'audioMessage' || messageType === 'voice' || messageType === 'AUDIO') {
-      if (!fileUrl) {
-        throw new Error('Audio message missing fileUrl');
-      }
-      
-      console.log(`dY" [WhatsAppWorker] Downloading media for message ${payload.key?.id}`);
-      // fileUrl from WA-AKG can be downloaded directly if it's absolute, 
-      // or we use the client's download method
-      const audioBuffer = await waClient.downloadMedia(payload.key?.id);
-      
-      parts.push({
-        inlineData: {
-          data: Buffer.from(audioBuffer).toString('base64'),
-          mimeType: payload.mimeType || 'audio/ogg' // WA-AKG uses ogg for voice notes
-        }
+    // 1. Resolve shopId if missing from job payload
+    if (!shopId && shopDomain) {
+      const shop = await prisma.shop.findUnique({
+        where: { domain: shopDomain }
       });
-      // Required to prevent 400 "Requests ending with a model turn" when history is used
-      parts.push({ text: '[User sent an audio message]' });
-    } else {
-      parts.push({ text: messageText });
+      if (shop) {
+        shopId = shop.id;
+      }
     }
 
-    // 2. Look up customer/order context (basic heuristic by phone number)
+    if (!shopId) {
+      console.error(`❌ [WhatsAppWorker] Cannot resolve shopId for domain ${shopDomain}`);
+      return { success: false, error: 'Shop ID not found' };
+    }
+
+    // 2. Extract customer phone from WhatsApp JID
     const phone = jid.split('@')[0];
-    
-    // Attempt to find an active order for this phone
-    const order = await prisma.order.findFirst({
-      where: { 
-        shop: { domain: shopDomain },
-        // Fixed Prisma query: String fields use contains, not string_contains
-        payload: { contains: phone } 
-      },
-      orderBy: { createdAt: 'desc' }
-    });
 
-    let contextText = `Customer Phone: ${phone}\n`;
-    if (order) {
-      contextText += `Found recent Order ID: ${order.id}\nStatus: ${order.status}\n`;
-    }
-
-    const systemInstruction = getPrompt('orderConfirmation') + '\n\n' + contextText;
-    
-    // 3. Load Chat History
-    const chatKey = `${shopDomain}:${sessionId}:${jid}`;
-    const history = await ChatStateService.load(chatKey) || [];
-
-    // 4. Call Gemini Chat
-    console.log(`dY" [WhatsAppWorker] Generating AI response...`);
-    const ai = getAIClient();
-    
-    const chat = ai.chats.create({
-      model: 'gemini-3.6-flash',
-      history: history,
-      config: {
-        systemInstruction: systemInstruction,
-        tools: [{ functionDeclarations: Object.values(AITools) }]
-      }
-    });
-
-    const response = await chat.sendMessage({ message: parts });
-    let textResponse = response.text || '';
-    
-    // 5. Handle tool calls if any
-    const functionCalls = response.functionCalls || [];
-    for (const call of functionCalls) {
-      console.log(`dY" [WhatsAppWorker] Dispatching Tool: ${call.name}`);
-      const result = await dispatchToolCall(shopDomain, call.name, call.args, { eventId: payload.key?.id });
-      
-      // Send tool result back to Gemini to get final text
-      const followUp = await chat.sendMessage({ message: [{
-        functionResponse: {
-          name: call.name,
-          response: result
-        }
-      }]});
-      
-      if (followUp.text) {
-        textResponse += '\n' + followUp.text;
+    // Handle voice / audio notes by signaling voice message text
+    if (messageType === 'audioMessage' || messageType === 'voice' || messageType === 'AUDIO') {
+      if (!messageText) {
+        messageText = "Assalam o Alaikum, main ne voice note bheja hai.";
       }
     }
 
-    // 6. Save updated history
-    const updatedHistory = await chat.getHistory();
-    await ChatStateService.save(chatKey, updatedHistory);
+    if (!messageText || messageText.trim() === '') {
+      console.log(`ℹ️ [WhatsAppWorker] Empty message received from ${jid}, skipping.`);
+      return { success: true, ignored: true };
+    }
 
+    // 3. Call AI Engine API Bridge with 5-second timeout protection
+    const AI_ENGINE_URL = (process.env.AI_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+    const AI_ENGINE_API_KEY = process.env.AI_ENGINE_API_KEY || '';
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    let textResponse = '';
+
+    try {
+      console.log(`🚀 [WhatsAppWorker] Calling AI Engine: ${AI_ENGINE_URL}/chat`);
+      const response = await fetch(`${AI_ENGINE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(AI_ENGINE_API_KEY ? { 'X-AI-ENGINE-KEY': AI_ENGINE_API_KEY } : {})
+        },
+        body: JSON.stringify({
+          shop_id: shopId,
+          customer_phone: phone,
+          message: messageText
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await response.json();
+        textResponse = data.response || '';
+        console.log(`✅ [WhatsAppWorker] AI Engine responded: [${data.agent}/${data.intent}] (${data.confidence})`);
+      } else {
+        console.warn(`⚠️ [WhatsAppWorker] AI Engine returned status ${response.status}`);
+        textResponse = "Jee, main aap ki madad ke liye hazir hoon. Aap apna sawal bata dein.";
+      }
+    } catch (apiErr) {
+      clearTimeout(timeoutId);
+      const isTimeout = apiErr.name === 'AbortError';
+      console.error(`⚠️ [WhatsAppWorker] AI Engine bridge error (${isTimeout ? 'Timeout >5s' : apiErr.message})`);
+      textResponse = "Jee, main aap ki madad ke liye hazir hoon. Baraye meherbani apna sawal dobara bhej dein.";
+    }
+
+    // 4. Send reply back to WhatsApp
     textResponse = textResponse.trim();
-    
-    // 7. Send reply back to WA-AKG
     if (textResponse) {
-      console.log(`dY" [WhatsAppWorker] Sending text reply to ${jid}`);
+      console.log(`📤 [WhatsAppWorker] Sending text reply to ${jid}`);
       await waClient.sendMessage(jid, textResponse);
     }
-    
+
     return { success: true };
-    
+
   } catch (err) {
-    console.error('?O [WhatsAppWorker] Error processing message:', err.message);
-    throw err;
+    // Catch-all to ensure the BullMQ worker process never crashes
+    console.error('❌ [WhatsAppWorker] Fatal job error handled gracefully:', err.message);
+    return { success: false, error: err.message };
   }
 }

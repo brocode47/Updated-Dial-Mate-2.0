@@ -174,6 +174,7 @@ INTENT_RULES = [
             "payment method", "payment methods", "cash on delivery", "jazzcash",
             "easypaisa", "bank transfer", "online payment", "advance payment",
             "payment kaise", "paise kaise", "payment options", "how to pay",
+            "cod available hai", "cod available", "cod hai",
             "کیش آن ڈیلیوری", "ادائیگی", "جاز کیش", "ایزی پیسہ", "بینک ٹرانسفر"
         ],
         "primary_keywords": [
@@ -415,7 +416,10 @@ def keyword_supervisor_agent(message: str, context: dict = None):
     if history:
         for msg in reversed(history):
             if msg.get("role") == "customer":
-                fallback_decision = keyword_supervisor_agent(msg.get("content", ""), context={"history": None})
+                content = (msg.get("content") or "").strip().lower()
+                if content == text:
+                    continue
+                fallback_decision = keyword_supervisor_agent(content, context={"history": None})
                 if fallback_decision["intent"] != "unknown_query" and fallback_decision["confidence"] >= 0.70:
                     return {
                         "agent": fallback_decision["agent"],
