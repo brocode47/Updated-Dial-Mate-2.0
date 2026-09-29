@@ -15,7 +15,11 @@ export const connection = new Redis(REDIS_URL, {
 });
 
 redis.on('error', (err) => {
-  console.error('❌ Redis Connection Error:', err.message);
+  console.warn('⚠️ Redis Connection Error:', err.message);
+});
+
+connection.on('error', (err) => {
+  console.warn('⚠️ BullMQ Redis Error:', err.message);
 });
 
 redis.on('ready', () => {

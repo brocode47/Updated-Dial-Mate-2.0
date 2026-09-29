@@ -7,6 +7,7 @@ import { shopify } from '../lib/shopify.js';
 import { prisma } from '../lib/db.js';
 import { verifyShopifyWebhook } from '../lib/webhookVerify.js';
 import { webhookQueue, whatsappQueue } from '../lib/queues.js';
+import { waLogger } from '../utils/waLogger.js';
 
 // 📞 Twilio client
 const client = twilio(
@@ -104,21 +105,23 @@ export function webhooksRouter() {
 
   
 
-  // NEW: WA-AKG Webhook Receiver
+  // WA-AKG Webhook Receiver
   router.post('/wa-akg', async (req, res) => {
     try {
-      const rawBody = req.body.toString('utf8');
-      const signature = req.get('x-webhook-signature'); // WA-AKG signature
+      const rawBody = req.body ? req.body.toString('utf8') : '';
+      const rawSig = req.get('x-webhook-signature') || req.get('X-Webhook-Signature');
       const secret = process.env.WA_AKG_WEBHOOK_SECRET;
       
       if (secret) {
-        if (!signature) {
+        if (!rawSig) {
           console.warn('WA-AKG Webhook missing signature');
           return res.status(401).send('Unauthorized');
         }
         
+        // Strip optional sha256= prefix for normalization
+        const normalizedSig = rawSig.startsWith('sha256=') ? rawSig : `sha256=${rawSig}`;
         const expectedSignature = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-        const sigBuffer = Buffer.from(signature);
+        const sigBuffer = Buffer.from(normalizedSig);
         const expectedBuffer = Buffer.from(expectedSignature);
 
         if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
@@ -127,9 +130,23 @@ export function webhooksRouter() {
         }
       }
 
+      if (!rawBody) {
+        return res.status(200).send('OK');
+      }
+
       const payload = JSON.parse(rawBody);
       
       if (payload.event === 'message.received' && payload.data) {
+        // 1. Ignore outbound echo messages sent by the bot itself
+        if (payload.data.key?.fromMe) {
+          return res.status(200).send('OK');
+        }
+
+        // 2. Ignore group chats
+        if (payload.data.isGroup || payload.data.key?.remoteJid?.includes('@g.us')) {
+          return res.status(200).send('OK');
+        }
+
         const sessionId = payload.sessionId;
         if (!sessionId) {
           console.warn('WA-AKG Webhook missing sessionId');
@@ -154,17 +171,31 @@ export function webhooksRouter() {
         }
 
         const shopDomain = integration.shop.domain;
-        
+        const messageId = payload.data.key?.id;
+        const traceId = messageId || crypto.randomUUID();
+
+        waLogger.received(traceId, {
+          shopId: integration.shop.id,
+          shopDomain,
+          sessionId: String(sessionId),
+          remoteJid: payload.data.key?.remoteJid,
+          type: payload.data.type || 'text'
+        });
+
         await whatsappQueue.add('wa-message', {
           shopId: integration.shop.id,
           shopDomain: shopDomain,
           sessionId: String(sessionId),
-          payload: payload.data
+          payload: payload.data,
+          traceId
         }, {
-          jobId: payload.data.key?.id || undefined
+          jobId: messageId || undefined
         });
-        
-        console.log(`Enqueued WhatsApp message: ${payload.data.key?.id} for tenant ${shopDomain}`);
+
+        waLogger.queued(traceId, {
+          jobId: messageId,
+          queue: 'whatsappQueue'
+        });
       }
       
       res.status(200).send('OK');

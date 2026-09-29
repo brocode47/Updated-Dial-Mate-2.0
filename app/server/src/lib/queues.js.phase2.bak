@@ -30,19 +30,9 @@ export const whatsappQueue = new Queue('whatsappQueue', {
   defaultJobOptions
 });
 
-// Dead Letter Queue for permanently failed WhatsApp jobs after all retries exhausted
-export const whatsappDeadLetterQueue = new Queue('whatsappDeadLetterQueue', {
-  connection,
-  defaultJobOptions: {
-    removeOnComplete: { age: 30 * 24 * 3600 },
-    removeOnFail: { age: 30 * 24 * 3600 }
-  }
-});
-
-// Gracefully close all queues
+// Optional utility to gracefully close queues if needed
 export async function closeQueues() {
   await callQueue.close();
   await webhookQueue.close();
   await whatsappQueue.close();
-  await whatsappDeadLetterQueue.close();
 }

@@ -1,12 +1,13 @@
-﻿import 'dotenv/config';
+import 'dotenv/config';
 import { Worker } from 'bullmq';
 import { connection } from '../lib/redis.js';
+import { whatsappDeadLetterQueue } from '../lib/queues.js';
 
 import { processCallJob } from './callWorker.js';
 import { processWebhookJob } from './webhookWorker.js';
 import { processWhatsAppJob } from './whatsappWorker.js';
 
-console.log('ðŸš€ Starting Background Workers...');
+console.log('🚀 Starting Background Workers...');
 
 const callWorker = new Worker('callQueue', processCallJob, {
   connection,
@@ -25,55 +26,67 @@ const whatsappWorker = new Worker('whatsappQueue', processWhatsAppJob, {
 
 // Setup error handlers
 callWorker.on('error', err => {
-  console.error('âŒ [CallWorker] Core error:', err.message);
+  console.error('❌ [CallWorker] Core error:', err.message);
 });
 
 callWorker.on('failed', (job, err) => {
-  console.error(`âŒ [CallWorker] Job ${job?.id} failed:`, err.message);
+  console.error(`❌ [CallWorker] Job ${job?.id} failed:`, err.message);
 });
 
 callWorker.on('completed', job => {
-  console.log(`âœ… [CallWorker] Job ${job.id} completed successfully`);
+  console.log(`✅ [CallWorker] Job ${job.id} completed successfully`);
 });
 
 webhookWorker.on('error', err => {
-  console.error('âŒ [WebhookWorker] Core error:', err.message);
+  console.error('❌ [WebhookWorker] Core error:', err.message);
 });
 
 webhookWorker.on('failed', (job, err) => {
-  console.error(`âŒ [WebhookWorker] Job ${job?.id} failed:`, err.message);
+  console.error(`❌ [WebhookWorker] Job ${job?.id} failed:`, err.message);
 });
 
 webhookWorker.on('completed', job => {
-  console.log(`âœ… [WebhookWorker] Job ${job.id} completed successfully`);
+  console.log(`✅ [WebhookWorker] Job ${job.id} completed successfully`);
 });
 
 whatsappWorker.on('error', err => {
-  console.error('âŒ [WhatsAppWorker] Core error:', err.message);
+  console.error('❌ [WhatsAppWorker] Core error:', err.message);
 });
 
-whatsappWorker.on('failed', (job, err) => {
-  console.error(`âŒ [WhatsAppWorker] Job ${job?.id} failed:`, err.message);
+whatsappWorker.on('failed', async (job, err) => {
+  const attemptsMade = job?.attemptsMade || 1;
+  const maxAttempts = job?.opts?.attempts || 3;
+  console.error(`❌ [WhatsAppWorker] Job ${job?.id} failed (${attemptsMade}/${maxAttempts}):`, err.message);
+
+  if (job && attemptsMade >= maxAttempts) {
+    console.error(`🚨 [WhatsAppWorker] Job ${job.id} exhausted all ${maxAttempts} retries. Enqueueing to Dead Letter Queue.`);
+    try {
+      await whatsappDeadLetterQueue.add('dead-letter-wa-message', {
+        originalJobId: job.id,
+        data: job.data,
+        failedReason: err.message,
+        failedAt: new Date().toISOString(),
+        attemptsMade
+      });
+    } catch (dlqErr) {
+      console.error('❌ [WhatsAppWorker] Failed to write to DLQ:', dlqErr.message);
+    }
+  }
 });
 
 whatsappWorker.on('completed', job => {
-  console.log(`âœ… [WhatsAppWorker] Job ${job.id} completed successfully`);
+  console.log(`✅ [WhatsAppWorker] Job ${job.id} completed successfully`);
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('ðŸ›‘ Shutting down workers...');
+const shutdown = async () => {
+  console.log('🛑 Shutting down workers...');
   await callWorker.close();
   await webhookWorker.close();
   await whatsappWorker.close();
+  await whatsappDeadLetterQueue.close();
   process.exit(0);
-});
+};
 
-process.on('SIGINT', async () => {
-  console.log('ðŸ›‘ Shutting down workers...');
-  await callWorker.close();
-  await webhookWorker.close();
-  await whatsappWorker.close();
-  process.exit(0);
-});
-
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
