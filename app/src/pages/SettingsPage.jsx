@@ -18,7 +18,12 @@ import {
   Globe,
   Phone,
   Bell,
-  CreditCard
+  CreditCard,
+  Bot,
+  Clock,
+  Sparkles,
+  Wifi,
+  WifiOff
 } from 'lucide-react?deps=react';
 
 import { useStore } from '../store.jsx';
@@ -63,6 +68,73 @@ export function SettingsPage() {
     setSupportEmail(state.session.shop.supportEmail || '');
     setTimezone(state.session.shop.timezone || 'Asia/Karachi');
   }, [state.session.user, state.session.shop, state.billing.currentPlan]);
+
+  // Phase 3 Step 3: Module 5 AI Persona & Business Settings State
+  const [aiName, setAiName] = React.useState('DialMate AI');
+  const [aiTone, setAiTone] = React.useState('Professional & Courteous');
+  const [aiLanguage, setAiLanguage] = React.useState('Roman Urdu & English');
+  const [fallbackMessage, setFallbackMessage] = React.useState('Jee, main aap ki madad ke liye hazir hoon. Aap apna sawal bata dein.');
+  const [workingHours, setWorkingHours] = React.useState('9:00 AM - 9:00 PM');
+  const [escalationNumber, setEscalationNumber] = React.useState('+923001234567');
+  const [whatsappInfo, setWhatsappInfo] = React.useState({ isConnected: false, sessionId: null, provider: 'WA-AKG' });
+  const [savingSettings, setSavingSettings] = React.useState(false);
+
+  React.useEffect(() => {
+    async function loadShopSettings() {
+      try {
+        const res = await apiClient.get('/shop/settings');
+        if (res) {
+          if (res.profile?.shopName) setShopName(res.profile.shopName);
+          if (res.profile?.contact) setSupportPhone(res.profile.contact);
+          if (res.aiSettings) {
+            if (res.aiSettings.aiName) setAiName(res.aiSettings.aiName);
+            if (res.aiSettings.tone) setAiTone(res.aiSettings.tone);
+            if (res.aiSettings.language) setAiLanguage(res.aiSettings.language);
+            if (res.aiSettings.fallbackMessage) setFallbackMessage(res.aiSettings.fallbackMessage);
+          }
+          if (res.businessRules) {
+            if (res.businessRules.workingHours) setWorkingHours(res.businessRules.workingHours);
+            if (res.businessRules.escalationNumber) setEscalationNumber(res.businessRules.escalationNumber);
+          }
+          if (res.whatsapp) {
+            setWhatsappInfo(res.whatsapp);
+          }
+        }
+      } catch (e) {
+        console.warn('Shop settings fetch notice:', e.message);
+      }
+    }
+    loadShopSettings();
+  }, []);
+
+  const saveAiAndBusinessSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const res = await apiClient.put('/shop/settings', {
+        profile: {
+          shopName,
+          contact: supportPhone
+        },
+        aiSettings: {
+          aiName,
+          tone: aiTone,
+          language: aiLanguage,
+          fallbackMessage
+        },
+        businessRules: {
+          workingHours,
+          escalationNumber
+        }
+      });
+      if (res && res.ok) {
+        pushToast('AI Settings and Business Rules saved successfully.', 'success');
+      }
+    } catch (err) {
+      pushToast(`Failed to save settings: ${err.message}`, 'error');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
 
   const voices = [
     { id: 'urdu_female_v3', label: 'Urdu Female — Warm & polite' },
@@ -348,6 +420,150 @@ export function SettingsPage() {
             >
               <Save size={16} />
               Save account
+            </button>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Module 5: AI Settings, Business Rules & WhatsApp Session */}
+      <div className="grid gap-5 xl:grid-cols-2">
+        <SectionCard
+          title="AI Persona & Conversation Settings"
+          subtitle="Configure DialMate AI agent identity, conversational tone, language, and fallback behavior"
+        >
+          <div className="grid gap-4">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">AI Name</span>
+              <div className="relative">
+                <Bot size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
+                <input
+                  value={aiName}
+                  onChange={(e) => setAiName(e.target.value)}
+                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                  placeholder="DialMate AI"
+                />
+              </div>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Conversational Tone</span>
+                <select
+                  value={aiTone}
+                  onChange={(e) => setAiTone(e.target.value)}
+                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                >
+                  <option value="Professional & Courteous">Professional & Courteous</option>
+                  <option value="Friendly & Casual">Friendly & Casual</option>
+                  <option value="Urgent & Direct">Urgent & Direct</option>
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Language Preference</span>
+                <select
+                  value={aiLanguage}
+                  onChange={(e) => setAiLanguage(e.target.value)}
+                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                >
+                  <option value="Roman Urdu & English">Roman Urdu & English</option>
+                  <option value="Urdu Script First">Urdu Script First</option>
+                  <option value="English Only">English Only</option>
+                </select>
+              </label>
+            </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">Fallback Safety Message</span>
+              <textarea
+                rows={2}
+                value={fallbackMessage}
+                onChange={(e) => setFallbackMessage(e.target.value)}
+                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                placeholder="Fallback response when query is outside domain..."
+              />
+            </label>
+
+            <button
+              onClick={saveAiAndBusinessSettings}
+              disabled={savingSettings}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
+            >
+              <Save size={16} />
+              {savingSettings ? 'Saving...' : 'Save AI settings'}
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Business Rules & WhatsApp AKG"
+          subtitle="Operating hours, escalation contact, and live WhatsApp gateway connection state"
+        >
+          <div className="grid gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Working Hours</span>
+                <div className="relative">
+                  <Clock size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
+                  <input
+                    value={workingHours}
+                    onChange={(e) => setWorkingHours(e.target.value)}
+                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                    placeholder="9:00 AM - 9:00 PM"
+                  />
+                </div>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Human Escalation Contact</span>
+                <div className="relative">
+                  <Phone size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
+                  <input
+                    value={escalationNumber}
+                    onChange={(e) => setEscalationNumber(e.target.value)}
+                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                    placeholder="+92300..."
+                  />
+                </div>
+              </label>
+            </div>
+
+            {/* WhatsApp Integration Status Box */}
+            <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.45)] p-4 text-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-semibold">
+                  {whatsappInfo.isConnected ? (
+                    <Wifi size={16} className="text-emerald-500" />
+                  ) : (
+                    <WifiOff size={16} className="text-amber-500" />
+                  )}
+                  <span>WhatsApp AKG Gateway</span>
+                </div>
+
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                    whatsappInfo.isConnected
+                      ? 'bg-emerald-400/20 text-emerald-500'
+                      : 'bg-amber-400/20 text-amber-500'
+                  }`}
+                >
+                  {whatsappInfo.isConnected ? 'Connected' : 'Offline / Standby'}
+                </span>
+              </div>
+
+              <div className="mt-2 text-xs text-[hsl(var(--foreground)/0.65)] space-y-1">
+                <div>Provider: <strong>{whatsappInfo.provider}</strong></div>
+                <div>Session: <strong>{whatsappInfo.sessionId || 'Default tenant session'}</strong></div>
+              </div>
+            </div>
+
+            <button
+              onClick={saveAiAndBusinessSettings}
+              disabled={savingSettings}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
+            >
+              <Save size={16} />
+              {savingSettings ? 'Saving...' : 'Save business rules'}
             </button>
           </div>
         </SectionCard>

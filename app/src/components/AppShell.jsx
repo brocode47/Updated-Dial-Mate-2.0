@@ -16,7 +16,10 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
-  UserRoundCog
+  UserRoundCog,
+  MessageSquare,
+  Users,
+  BarChart3
 } from 'lucide-react?deps=react';
 
 import { useStore } from '../store.jsx';
@@ -24,6 +27,9 @@ import { useStore } from '../store.jsx';
 const navItems = [
   { href: '#/onboarding', label: 'Onboarding', icon: Sparkles },
   { href: '#/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '#/inbox', label: 'Conversations', icon: MessageSquare },
+  { href: '#/customers', label: 'Customers', icon: Users },
+  { href: '#/analytics', label: 'AI Analytics', icon: BarChart3 },
   { href: '#/orders', label: 'Orders', icon: Package },
   { href: '#/calls', label: 'Calls', icon: Phone },
   { href: '#/billing', label: 'Billing', icon: CreditCard, feature: 'billing' },

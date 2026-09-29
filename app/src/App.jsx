@@ -7,12 +7,18 @@ import { CallsPage } from './pages/CallsPage.jsx';
 import { BillingPage } from './pages/BillingPage.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
 import { OnboardingPage } from './pages/OnboardingPage.jsx';
+import { InboxPage } from './pages/InboxPage.jsx';
+import { CustomersPage } from './pages/CustomersPage.jsx';
+import { AnalyticsPage } from './pages/AnalyticsPage.jsx';
 import { hashRoute } from './utils.jsx';
 import { useStore } from './store.jsx';
 import { apiClient } from './api/client.js';
 
 const routes = {
   '/dashboard': DashboardPage,
+  '/inbox': InboxPage,
+  '/customers': CustomersPage,
+  '/analytics': AnalyticsPage,
   '/orders': OrdersPage,
   '/calls': CallsPage,
   '/billing': BillingPage,

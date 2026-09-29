@@ -31,6 +31,10 @@ model Shop {
   id                    String                  @id @default(uuid())
   organizationId        String
   domain                String                  @unique
+  name                  String?
+  logo                  String?
+  contact               String?
+  settings              String?
   accessToken           String?
   isActive              Boolean                 @default(true)
   installedAt           DateTime                @default(now())
@@ -112,6 +116,8 @@ model Conversation {
   customerId String?
   channel    String    @default("WHATSAPP")
   status     String    @default("ACTIVE")
+  assignedTo String?
+  isTakeover Boolean   @default(false)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   customer   Customer? @relation(fields: [customerId], references: [id])
