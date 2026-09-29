@@ -5,14 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def get_connection():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "3"))
-    )
+from app.memory.db_memory import get_connection
 
 
 def get_customer_order_by_phone(phone, shop_id=None):

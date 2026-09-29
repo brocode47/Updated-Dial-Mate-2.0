@@ -71,7 +71,10 @@ def main_agent(message, phone=None, shop_id=None, order_id=None, **kwargs):
     context = {
         "history": history or [],
         "customer_memory": customer_memory or {},
-        "previous_orders": previous_orders
+        "previous_orders": previous_orders,
+        "shop_id": shop_id,
+        "phone": phone,
+        "order_id": order_id
     }
 
     decision = route_message(message, context)

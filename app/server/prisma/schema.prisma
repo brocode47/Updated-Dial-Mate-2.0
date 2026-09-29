@@ -170,6 +170,9 @@ model Product {
   category    String?
   price       Float
   stock       Int      @default(0)
+  currency    String   @default("PKR")
+  variants    String?
+  images      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

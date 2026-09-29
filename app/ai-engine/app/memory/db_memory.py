@@ -8,12 +8,17 @@ load_dotenv()
 
 
 def get_connection():
+    db_url = os.getenv("DATABASE_URL")
+    timeout = int(os.getenv("DB_CONNECT_TIMEOUT", "3"))
+    if db_url:
+        return psycopg2.connect(db_url, connect_timeout=timeout)
     return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "3"))
+        host=os.getenv("DB_HOST", "localhost"),
+        port=int(os.getenv("DB_PORT", "5432")),
+        database=os.getenv("DB_NAME", "dialmate"),
+        user=os.getenv("DB_USER", "postgres"),
+        password=os.getenv("DB_PASSWORD", "postgres"),
+        connect_timeout=timeout
     )
 
 
