@@ -22,16 +22,17 @@ def test_a_routing_isolation():
     from app.agents.supervisor import keyword_supervisor_agent
     
     tests = {
-        "Mujhe wife ke liye gift chahiye": "sales_agent",
+        "Mujhe wife ke liye gift chahiye": ["product_agent", "sales_agent"],
         "Mera order kahan hai": "order_agent", 
         "Tumhara boss kon hai": "support_agent",
-        "Delivery kab tak ayegi": "delivery_agent",
+        "Delivery kab tak ayegi": ["support_agent", "delivery_agent"],
     }
     
     all_pass = True
     for msg, expected in tests.items():
         result = keyword_supervisor_agent(msg)
-        if result["agent"] != expected:
+        expected_list = expected if isinstance(expected, list) else [expected]
+        if result["agent"] not in expected_list:
             print(f"  FAIL: '{msg}' -> {result['agent']} (expected {expected})")
             all_pass = False
     

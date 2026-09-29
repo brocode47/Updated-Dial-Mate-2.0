@@ -64,97 +64,38 @@ def main_agent(message, order_id=None, phone=None, shop_id=None):
     agent = decision["agent"]
     intent = decision["intent"]
 
-
     if agent == "support_agent":
-
         result = support_agent(
             intent,
             message,
             context
         )
-
         response = result["response"]
 
-    elif intent == "order_status":
-
-        if not order_id:
-
-            response = "Jee, mujhe aap ka order record nahi mil raha."
-
-        else:
-
-            order = get_order(order_id)
-
-            if order:
-
-                response = (
-                    f"Jee, main ne aap ka order check kiya hai.\n\n"
-                    f"Order {order['id']} ka status {order['status']} hai."
-                )
-
-                if order.get("courier"):
-                    response += (
-                        f"\nCourier: {order['courier']}"
-                    )
-
-                if order.get("tracking_status"):
-                    response += (
-                        f"\nTracking Status: {order['tracking_status']}"
-                    )
-
-                if order.get("location"):
-                    response += (
-                        f"\nCurrent Location: {order['location']}"
-                    )
-
-                if order.get("expected_delivery"):
-                    response += (
-                        f"\nExpected Delivery: {order['expected_delivery']}"
-                    )
-
-                response += (
-                    "\n\nAgar aap ko mazeed madad chahiye ho to batayein."
-                )
-
-            else:
-
-                response = "Jee, mujhe aap ka order record nahi mil raha."
-
-
-    elif intent in ["cancel_order", "confirm_order"]:
-
+    elif agent == "order_agent" or intent in ["order_status", "order_cancel", "cancel_order", "late_order_complaint", "confirm_order"]:
         result = order_agent(
             intent,
-            order_id
+            order_id=order_id,
+            message=message,
+            context=context
         )
-
         response = result["message"]
-
 
     elif agent == "delivery_agent":
-
         result = delivery_agent(order_id)
-
         response = result["message"]
-
 
     elif agent in ["product_agent", "sales_agent"]:
-
-        result = product_agent(message, context)
-
+        result = product_agent(message, context, intent=intent)
         response = result["message"]
 
-
     else:
-
         response = (
             "Jee, main aap ki madad ke liye hazir hoon. "
             "Aap apna sawal bata dein."
         )
 
-
     if shop_id:
-
         save_message(
             shop_id,
             phone,

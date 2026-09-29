@@ -1,6 +1,7 @@
 import time
 from app.tools.product_tools import search_products
-from app.models.llm import safe_llm_invoke
+from app.agents.language import detect_language
+from app.agents.templates import get_template
 
 # Template responses — zero LLM latency for structured product data
 PRODUCT_LIST_TEMPLATE = """Jee, aap ke liye ye options available hain{personalization}:
@@ -42,14 +43,48 @@ def _get_personalization(memory):
     return ""
 
 
-def product_agent(message, context=None):
+def product_agent(message, context=None, intent=None):
     if context is None:
         context = {"history": [], "customer_memory": {}, "previous_orders": []}
         
     history = context.get("history", [])
     memory = context.get("customer_memory", {})
 
+    lang = detect_language(message)
     text = message.lower()
+
+    # Determine intent if not explicitly passed
+    if not intent:
+        intent = context.get("intent")
+    if not intent:
+        from app.agents.supervisor import keyword_supervisor_agent
+        intent = keyword_supervisor_agent(message, context).get("intent", "product_recommendation")
+
+    # 1. Product Availability
+    if intent == "product_availability":
+        return {
+            "message": get_template("product_availability", lang)
+        }
+
+    # 2. Price Inquiry
+    if intent == "price_inquiry":
+        return {
+            "message": get_template("price_inquiry", lang)
+        }
+
+    # 3. Product Details / Specifications
+    if intent == "product_details":
+        return {
+            "message": get_template("product_details", lang)
+        }
+
+    # 4. Size & Color Inquiry
+    if intent == "size_color_inquiry":
+        return {
+            "message": get_template("size_color_inquiry", lang)
+        }
+
+    # 5. Product Recommendation (Fast path with memory + DB lookup)
     if history:
         for msg in reversed(history):
             if msg.get("role") == "customer":
@@ -57,26 +92,25 @@ def product_agent(message, context=None):
                 break
 
     products = []
-    
-    # We still use keyword logic but enhance it using memory
     search_category = "gift"
     if memory.get("preferred_categories"):
         search_category = memory["preferred_categories"].split(",")[0].strip()
 
     max_price = memory.get("average_budget") or 10000
 
-    if "gift" in text or "wife" in text or "biwi" in text or "suggest" in text or "recommend" in text:
-        products = search_products(
-            category=search_category,
-            max_price=max_price
-        )
+    if any(w in text for w in ["gift", "wife", "biwi", "husband", "suggest", "recommend", "birthday", "anniversary", "chahiye"]):
+        try:
+            products = search_products(
+                category=search_category,
+                max_price=max_price
+            )
+        except Exception:
+            products = []
 
     if products:
-        # ---- FAST PATH: Template response (no LLM needed) ----
         product_list_str = _format_product_list(products)
         personalization = _get_personalization(memory)
         
-        # Use budget-aware template if budget is set
         if memory.get("average_budget"):
             result = PRODUCT_LIST_TEMPLATE_BUDGET.format(
                 personalization=personalization,
@@ -92,13 +126,12 @@ def product_agent(message, context=None):
             "message": result
         }
 
-    # ---- No products found: template response asking for preferences ----
-    # Check if we have ANY info to tailor the ask
+    # No products found or asking for preferences
     if memory.get("preferred_categories") or memory.get("average_budget"):
         category_mention = memory.get("preferred_categories", "general gifts")
         result = NO_PRODUCTS_TEMPLATE.format(category=category_mention)
     else:
-        result = ASK_BUDGET_TEMPLATE
+        result = get_template("product_recommendation_ask", lang)
 
     return {
         "message": result
