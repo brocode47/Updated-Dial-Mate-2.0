@@ -14,7 +14,11 @@ import {
   ShieldCheck,
   AlertCircle,
   HelpCircle,
-  Loader2
+  Loader2,
+  PhoneCall,
+  PhoneOff,
+  PhoneMissed,
+  PhoneForwarded
 } from 'lucide-react?deps=react';
 
 import { PageHeader } from '../components/PageHeader.jsx';
@@ -32,16 +36,19 @@ export function AnalyticsPage() {
   const [agents, setAgents] = React.useState([]);
   const [commerceProducts, setCommerceProducts] = React.useState(null);
   const [commerceOrders, setCommerceOrders] = React.useState(null);
+  const [codRange, setCodRange] = React.useState('7d');
+  const [codAnalytics, setCodAnalytics] = React.useState(null);
 
   const fetchAllAnalytics = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [ovRes, intRes, agRes, prRes, ordRes] = await Promise.all([
+      const [ovRes, intRes, agRes, prRes, ordRes, codRes] = await Promise.all([
         apiClient.get('/analytics/overview'),
         apiClient.get('/analytics/intents'),
         apiClient.get('/analytics/agents'),
         apiClient.get('/analytics/products'),
-        apiClient.get('/analytics/orders')
+        apiClient.get('/analytics/orders'),
+        apiClient.get(`/analytics/cod?range=${codRange}`).catch(() => null)
       ]);
 
       if (ovRes) setOverview(ovRes);
@@ -49,12 +56,13 @@ export function AnalyticsPage() {
       if (agRes && agRes.agents) setAgents(agRes.agents);
       if (prRes) setCommerceProducts(prRes);
       if (ordRes) setCommerceOrders(ordRes);
+      if (codRes) setCodAnalytics(codRes);
     } catch (err) {
       pushToast({ title: 'Analytics error', body: err.message, tone: 'danger' });
     } finally {
       setLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, codRange]);
 
   React.useEffect(() => {
     fetchAllAnalytics();
@@ -76,6 +84,97 @@ export function AnalyticsPage() {
           </button>
         }
       />
+
+      {/* Phase 4: Automated COD Confirmation Telemetry */}
+      <div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
+          <div>
+            <div className="text-xs uppercase tracking-[0.16em] font-bold text-[hsl(var(--foreground)/0.5)]">
+              Automated COD Confirmation Telemetry
+            </div>
+            <p className="text-xs text-[hsl(var(--foreground)/0.6)]">
+              Voice IVR confirmation efficiency, call connection ratios, and multi-channel fallback rates.
+            </p>
+          </div>
+
+          <div className="flex gap-1">
+            {[
+              ['today', 'Today'],
+              ['7d', 'Last 7 Days'],
+              ['30d', 'Last 30 Days']
+            ].map(([rangeKey, label]) => (
+              <button
+                key={rangeKey}
+                onClick={() => setCodRange(rangeKey)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                  codRange === rangeKey
+                    ? 'bg-[hsl(var(--primary))] text-white'
+                    : 'border border-[hsl(var(--border))] text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted))]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <StatCard
+            label="Orders Received"
+            value={codAnalytics?.ordersReceived ?? 0}
+            help="Shopify orders in window"
+            icon={PhoneForwarded}
+          />
+          <StatCard
+            label="Orders Called"
+            value={codAnalytics?.ordersCalled ?? 0}
+            help="Automated calls triggered"
+            icon={PhoneCall}
+          />
+          <StatCard
+            label="Confirmation Rate"
+            value={`${codAnalytics?.confirmationRate ?? 0}%`}
+            help="Approved by customer call"
+            icon={CheckCircle2}
+          />
+          <StatCard
+            label="Rejection Rate"
+            value={`${codAnalytics?.rejectionRate ?? 0}%`}
+            help="Cancelled on call by customer"
+            icon={AlertTriangle}
+          />
+          <StatCard
+            label="No-Answer Rate"
+            value={`${codAnalytics?.noAnswerRate ?? 0}%`}
+            help="Ringing but unanswered"
+            icon={PhoneMissed}
+          />
+          <StatCard
+            label="Avg Call Duration"
+            value={`${codAnalytics?.avgCallDuration ?? 0}s`}
+            help="Average conversation length"
+            icon={Clock}
+          />
+          <StatCard
+            label="Successful Calls"
+            value={codAnalytics?.successfulCalls ?? 0}
+            help="Completed IVR sessions"
+            icon={CheckCircle2}
+          />
+          <StatCard
+            label="Failed Calls"
+            value={codAnalytics?.failedCalls ?? 0}
+            help="Dropped or network failed"
+            icon={PhoneOff}
+          />
+          <StatCard
+            label="WhatsApp Fallback Rate"
+            value={`${codAnalytics?.whatsappFallbackRate ?? 0}%`}
+            help="WA-AKG follow-ups sent"
+            icon={MessageSquare}
+          />
+        </div>
+      </div>
 
       {/* Module 3: AI Analytics KPI Cards */}
       <div>

@@ -19,7 +19,12 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  PhoneMissed,
+  PhoneOff,
+  PhoneIncoming,
+  ArrowRight,
+  X
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
@@ -45,6 +50,7 @@ export function DashboardPage() {
   const [startDate, setStartDate] = React.useState('');
   const [endDate, setEndDate] = React.useState('');
   const [loadError, setLoadError] = React.useState(null);
+  const [selectedActivity, setSelectedActivity] = React.useState(null);
 
   const hasToken = Boolean(typeof window !== 'undefined' && localStorage.getItem('dial-mate-token'));
 
@@ -323,43 +329,67 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Enterprise KPI Cards Grid */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      {/* Enterprise KPI Cards Grid - All Phase 4 Metrics */}
+      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5">
         <StatCard
           icon={PhoneForwarded}
-          label="Total Orders"
-          value={loading ? '...' : String(totalOrders)}
-          help="All-time received from Shopify"
+          label="Today's Orders"
+          value={loading ? '...' : String(stats?.todayOrders ?? 0)}
+          help="Incoming Shopify orders today"
+        />
+        <StatCard
+          icon={PhoneCall}
+          label="Today's Calls"
+          value={loading ? '...' : String(stats?.todayCalls ?? 0)}
+          help="Urdu voice calls placed today"
+        />
+        <StatCard
+          icon={BadgeCheck}
+          label="Confirmed"
+          value={loading ? '...' : String(stats?.confirmedOrders ?? confirmedOrders)}
+          help="Approved COD shipments"
+        />
+        <StatCard
+          icon={ShieldAlert}
+          label="Rejected / Cancelled"
+          value={loading ? '...' : String(stats?.cancelledOrders ?? cancelledOrders)}
+          help="Customer cancelled or fake"
+        />
+        <StatCard
+          icon={PhoneMissed}
+          label="No Answer"
+          value={loading ? '...' : String(stats?.noAnswerCalls ?? 0)}
+          help="Unanswered call attempts"
+        />
+        <StatCard
+          icon={TimerReset}
+          label="Pending Confirmation"
+          value={loading ? '...' : String(stats?.pendingOrders ?? pendingOrders)}
+          help="Orders awaiting confirmation"
+        />
+        <StatCard
+          icon={Activity}
+          label="Confirmation Rate"
+          value={loading ? '...' : `${stats?.confirmationRate ?? 0}%`}
+          help="Confirmed vs received orders"
+        />
+        <StatCard
+          icon={Clock}
+          label="Calls Remaining"
+          value={loading ? '...' : String(stats?.callsRemaining ?? stats?.pendingOrders ?? pendingOrders)}
+          help="In queue for Urdu voice agent"
+        />
+        <StatCard
+          icon={PhoneOff}
+          label="Failed Calls"
+          value={loading ? '...' : String(stats?.failedCalls ?? 0)}
+          help="Telephony errors / dropped"
         />
         <StatCard
           icon={CircleDollarSign}
           label="Confirmed Revenue"
           value={loading ? '...' : formatCurrency(totalRevenue)}
-          help="Value of confirmed COD orders"
-        />
-        <StatCard
-          icon={BadgeCheck}
-          label="Confirmed Orders"
-          value={loading ? '...' : String(confirmedOrders)}
-          help="Approved by customer call"
-        />
-        <StatCard
-          icon={TimerReset}
-          label="Pending Action"
-          value={loading ? '...' : String(pendingOrders)}
-          help="Awaiting confirmation call"
-        />
-        <StatCard
-          icon={ShieldAlert}
-          label="Cancelled Orders"
-          value={loading ? '...' : String(cancelledOrders)}
-          help="Customer cancelled / fraud"
-        />
-        <StatCard
-          icon={Activity}
-          label="Connection Rate"
-          value={loading ? '...' : `${connectionRate}%`}
-          help="Successful completed calls"
+          help="Total value of confirmed orders"
         />
       </div>
 
@@ -426,6 +456,98 @@ export function DashboardPage() {
             Sync
           </button>
         </div>
+      </div>
+
+      {/* Phase 4: Recent Call Activity Feed */}
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+        <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+          <div className="flex items-center gap-2">
+            <div className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Recent Call Activity</h2>
+              <p className="text-xs text-[hsl(var(--foreground)/0.6)]">
+                Live stream of AI voice calls, Urdu IVR interactions, and customer confirmation responses.
+              </p>
+            </div>
+          </div>
+          <a
+            href="#/calls"
+            className="text-xs font-semibold text-[hsl(var(--primary))] hover:underline flex items-center gap-1"
+          >
+            <span>View All Calls</span>
+            <ArrowRight size={13} />
+          </a>
+        </div>
+
+        {stats?.recentActivity && stats.recentActivity.length > 0 ? (
+          <div className="mt-4 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {stats.recentActivity.map((activity) => {
+              const cleanOutcome = String(activity.outcome || '').toLowerCase();
+              let outcomeBadgeStyle = 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20';
+              let Icon = CheckCircle2;
+
+              if (cleanOutcome === 'confirmed' || cleanOutcome === 'completed') {
+                outcomeBadgeStyle = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20';
+                Icon = CheckCircle2;
+              } else if (cleanOutcome === 'rejected' || cleanOutcome === 'cancelled') {
+                outcomeBadgeStyle = 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20';
+                Icon = XCircle;
+              } else if (cleanOutcome === 'no_answer' || cleanOutcome === 'no-answer' || cleanOutcome === 'busy') {
+                outcomeBadgeStyle = 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20';
+                Icon = PhoneMissed;
+              } else if (cleanOutcome === 'failed') {
+                outcomeBadgeStyle = 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20';
+                Icon = PhoneOff;
+              }
+
+              const timeStr = activity.timestamp
+                ? new Date(activity.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : 'Just now';
+
+              return (
+                <div
+                  key={activity.id}
+                  onClick={() => setSelectedActivity(activity)}
+                  className="group cursor-pointer rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.25)] p-3.5 transition-all hover:border-[hsl(var(--primary)/0.5)] hover:bg-[hsl(var(--muted)/0.45)] hover:shadow-xs"
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold text-[hsl(var(--foreground))]">
+                      #{activity.orderNumber || activity.orderId?.slice(0, 8) || 'Order'}
+                    </span>
+                    <span className="text-[11px] text-[hsl(var(--foreground)/0.5)] flex items-center gap-1">
+                      <Clock size={11} />
+                      {timeStr}
+                    </span>
+                  </div>
+
+                  <div className="mt-1.5 truncate text-xs font-semibold text-[hsl(var(--foreground))]">
+                    {activity.customerName || 'Customer'}
+                  </div>
+
+                  <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-[hsl(var(--border)/0.6)]">
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize ${outcomeBadgeStyle}`}>
+                      <Icon size={10} />
+                      {activity.outcome || 'Logged'}
+                    </span>
+                    {activity.durationSec ? (
+                      <span className="font-mono text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                        {activity.durationSec}s
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="py-8 text-center text-xs text-[hsl(var(--foreground)/0.6)]">
+            <PhoneCall size={20} className="mx-auto text-[hsl(var(--foreground)/0.3)] mb-1.5" />
+            No recent calls in the last session. New outbound confirmation calls will stream here automatically.
+          </div>
+        )}
       </div>
 
       {/* Live Orders Section */}
@@ -596,6 +718,74 @@ export function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Activity Details Modal */}
+      {selectedActivity ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="relative w-full max-w-md rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+              <div className="flex items-center gap-2">
+                <PhoneCall size={16} className="text-[hsl(var(--primary))]" />
+                <span className="text-sm font-bold text-[hsl(var(--foreground))]">
+                  Call Record #{selectedActivity.orderNumber}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedActivity(null)}
+                className="rounded-lg p-1 text-[hsl(var(--foreground)/0.5)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="mt-3 space-y-2.5 text-xs">
+              <div className="flex justify-between py-1 border-b border-[hsl(var(--border)/0.5)]">
+                <span className="text-[hsl(var(--foreground)/0.6)]">Customer Name:</span>
+                <span className="font-semibold text-[hsl(var(--foreground))]">{selectedActivity.customerName}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-[hsl(var(--border)/0.5)]">
+                <span className="text-[hsl(var(--foreground)/0.6)]">Call Outcome:</span>
+                <span className="font-bold text-[hsl(var(--foreground))] capitalize">{selectedActivity.outcome}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-[hsl(var(--border)/0.5)]">
+                <span className="text-[hsl(var(--foreground)/0.6)]">Call Duration:</span>
+                <span className="font-mono text-[hsl(var(--foreground))]">{selectedActivity.durationSec || 0} seconds</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-[hsl(var(--border)/0.5)]">
+                <span className="text-[hsl(var(--foreground)/0.6)]">Timestamp:</span>
+                <span className="text-[hsl(var(--foreground)/0.8)]">
+                  {selectedActivity.timestamp ? new Date(selectedActivity.timestamp).toLocaleString() : 'N/A'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2 pt-3 border-t border-[hsl(var(--border))]">
+              {selectedActivity.orderId ? (
+                <button
+                  onClick={() => {
+                    const id = selectedActivity.orderId;
+                    setSelectedActivity(null);
+                    handleCallOrder(id);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:opacity-90"
+                >
+                  <RotateCcw size={12} />
+                  <span>Retry Call</span>
+                </button>
+              ) : null}
+              <button
+                onClick={() => {
+                  setSelectedActivity(null);
+                  window.location.hash = '/calls';
+                }}
+                className="rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                Open in Calls Page
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <ShopifyConnectModal
         isOpen={isConnectModalOpen}

@@ -183,78 +183,71 @@ export function twilioRouter() {
     });
   });
 
+  router.all('/gather', async (req, res) => {
+    const { Digits, orderId, callId } = req.query;
+    console.log('📞 /twilio/gather received:', { orderId, Digits });
+
+    if (orderId) {
+      const order = await prisma.order.findUnique({
+        where: { id: String(orderId) },
+        include: { shop: true }
+      });
+
+      if (order && order.shop) {
+        const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+        await CallWorkflowService.handleCallResult({
+          orderId: order.id,
+          shopDomain: order.shop.domain,
+          callId,
+          digits: Digits
+        });
+      }
+    }
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    if (Digits === '1') {
+      response.say('Shukriya. Aap ka order confirm kar diya gaya hai. Allah Hafiz.');
+    } else if (Digits === '2') {
+      response.say('Aap ka order cancel kar diya gaya hai. Allah Hafiz.');
+    } else {
+      response.say('Koi jawab nahi mila. Allah Hafiz.');
+    }
+    res.type('text/xml');
+    res.send(response.toString());
+  });
+
   router.all('/status', async (req, res) => {
     console.log('✅ /twilio/status HIT');
 
     const orderId = req.query.orderId;
+    const callId = req.query.callId;
     const callSid = req.body?.CallSid || req.query.CallSid || '';
     const callStatus = req.body?.CallStatus || req.query.CallStatus || 'unknown';
+    const durationSec = parseInt(req.body?.CallDuration || req.query?.CallDuration || '0', 10);
+    const recordingUrl = req.body?.RecordingUrl || req.query?.RecordingUrl || null;
 
     try {
-      if (orderId && callStatus) {
-        await prisma.order.update({
-          where: { id: orderId },
-          data: { callStatus, callSid }
-        });
-
+      if (orderId) {
         const order = await prisma.order.findUnique({
-          where: { id: orderId }
+          where: { id: String(orderId) },
+          include: { shop: true }
         });
 
-        if (!order) return res.sendStatus(200);
-
-        if (order.status === 'Confirmed' || order.status === 'Cancelled' || order.status === 'Human Transfer') {
-          return res.sendStatus(200);
-        }
-
-        const failedStatuses = ['busy', 'failed', 'no-answer'];
-        // Note: For live streams, 'completed' without confirmation might also be a drop.
-        const shouldRetry =
-          failedStatuses.includes(callStatus) ||
-          (callStatus === 'completed' && order.status === 'Pending Confirmation');
-
-        if (shouldRetry) {
-          const retryCount = order.retryCount || 0;
-
-          if (retryCount >= 2) {
-            await prisma.order.update({
-              where: { id: orderId },
-              data: { tag: 'Max Retries Reached' }
-            });
-            return res.sendStatus(200);
-          }
-
-          await prisma.order.update({
-            where: { id: orderId },
-            data: { retryCount: retryCount + 1, tag: 'Retry' }
+        if (order && order.shop) {
+          const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+          await CallWorkflowService.handleCallResult({
+            orderId: order.id,
+            shopDomain: order.shop.domain,
+            callId,
+            callStatus,
+            durationSec,
+            recordingUrl
           });
-
-          const payload = JSON.parse(order.payload || '{}');
-          const customerName = payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer';
-          let phone = payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || payload?.billing_address?.phone;
-
-          if (phone) {
-            if (!phone.startsWith('+')) phone = '+92' + phone.replace(/^0/, '');
-
-            const productName = payload?.line_items?.[0]?.title || 'your product';
-            const productPrice = payload?.total_price || '0';
-
-            console.log(`⏳ Enqueueing retry call for ${orderId} in 60 seconds...`);
-            await callQueue.add('retry-call', {
-              phone,
-              customerName,
-              productName,
-              productPrice,
-              orderId
-            }, {
-              delay: 60 * 1000,
-              jobId: `retry-${orderId}-${retryCount}`
-            });
-          }
         }
       }
     } catch (err) {
-      console.error('❌ Call status save failed:', err.message);
+      console.error('❌ Call status processing failed:', err.message);
     }
 
     return res.sendStatus(200);

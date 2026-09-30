@@ -21,7 +21,11 @@ import {
   MapPin,
   Phone,
   Calendar,
-  AlertCircle
+  AlertCircle,
+  CreditCard,
+  MessageSquare,
+  ArrowDown,
+  Bot
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
@@ -490,33 +494,125 @@ export function OrdersPage() {
                   <div className="text-[hsl(var(--foreground)/0.8)] font-semibold">{selectedOrder.productName}</div>
                 )}
                 <div className="pt-2 border-t border-[hsl(var(--border))] flex justify-between font-bold text-sm text-[hsl(var(--foreground))]">
-                  <span>Total (COD)</span>
+                  <span>Total ({selectedOrder.payment || 'Cash on Delivery'})</span>
                   <span className="font-mono">{formatCurrency(selectedOrder.totalAmount || selectedOrder.total)}</span>
                 </div>
               </div>
 
-              {/* Call History / Details */}
-              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-1.5">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
-                  <PhoneCall size={14} className="text-[hsl(var(--primary))]" />
-                  <span>Call Details</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[hsl(var(--foreground)/0.6)]">Call Status:</span>
-                  <span className="font-semibold text-[hsl(var(--foreground))] capitalize">{selectedOrder.callStatus || 'pending'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[hsl(var(--foreground)/0.6)]">Retry Attempts:</span>
-                  <span className="font-semibold text-[hsl(var(--foreground))]">{selectedOrder.retryCount || 0}</span>
-                </div>
-                {selectedOrder.callSid ? (
-                  <div className="flex justify-between">
-                    <span className="text-[hsl(var(--foreground)/0.6)]">Call SID:</span>
-                    <span className="font-mono text-[10px] text-[hsl(var(--foreground)/0.7)] truncate max-w-[200px]">
-                      {selectedOrder.callSid}
-                    </span>
+              {/* Payment & Eligibility Info */}
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-2">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <CreditCard size={14} className="text-[hsl(var(--primary))]" />
+                    <span>Payment & Calling Eligibility</span>
                   </div>
-                ) : null}
+                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                    COD Eligible
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-[hsl(var(--foreground)/0.6)]">Gateway:</span>
+                    <div className="font-medium text-[hsl(var(--foreground))]">{selectedOrder.payment || 'Cash on Delivery (COD)'}</div>
+                  </div>
+                  <div>
+                    <span className="text-[hsl(var(--foreground)/0.6)]">Calling Window:</span>
+                    <div className="font-medium text-[hsl(var(--foreground))]">09:00 - 21:00 PKT</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Automated COD Confirmation Timeline */}
+              <div className="rounded-xl border border-[hsl(var(--border))] p-3.5 space-y-3">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                  <Clock size={14} className="text-[hsl(var(--primary))]" />
+                  <span>Confirmation Workflow Timeline</span>
+                </div>
+
+                <div className="relative pl-5 space-y-3 border-l-2 border-[hsl(var(--primary)/0.3)] ml-2">
+                  {/* Step 1: Order Created */}
+                  <div className="relative">
+                    <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-emerald-500 border-2 border-[hsl(var(--card))]" />
+                    <div className="font-semibold text-[hsl(var(--foreground))]">1. Order Created</div>
+                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                      {selectedOrder.createdAt ? new Date(selectedOrder.createdAt).toLocaleString() : 'Recorded in Shopify'}
+                    </div>
+                  </div>
+
+                  {/* Step 2: Confirmation Queued */}
+                  <div className="relative">
+                    <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-blue-500 border-2 border-[hsl(var(--card))]" />
+                    <div className="font-semibold text-[hsl(var(--foreground))]">2. Confirmation Queued</div>
+                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                      Eligible COD order pushed to BullMQ priority queue
+                    </div>
+                  </div>
+
+                  {/* Step 3: Call Attempt 1 */}
+                  <div className="relative">
+                    <div className={`absolute -left-[25px] top-0 h-3 w-3 rounded-full border-2 border-[hsl(var(--card))] ${
+                      selectedOrder.callStatus === 'completed' || selectedOrder.callStatus === 'confirmed'
+                        ? 'bg-emerald-500'
+                        : selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer'
+                        ? 'bg-amber-500'
+                        : 'bg-blue-500 animate-pulse'
+                    }`} />
+                    <div className="font-semibold text-[hsl(var(--foreground))]">
+                      3. Call Attempt 1 ({selectedOrder.callStatus || 'pending'})
+                    </div>
+                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                      {selectedOrder.callSid ? `Twilio SID: ${selectedOrder.callSid.slice(0, 16)}...` : 'Automated Urdu voice agent dispatched'}
+                    </div>
+                  </div>
+
+                  {/* Step 4: Retries or Follow-up */}
+                  {selectedOrder.retryCount > 0 ? (
+                    <div className="relative">
+                      <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-amber-500 border-2 border-[hsl(var(--card))]" />
+                      <div className="font-semibold text-[hsl(var(--foreground))]">
+                        4. Retried ({selectedOrder.retryCount} attempt{selectedOrder.retryCount > 1 ? 's' : ''})
+                      </div>
+                      <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                        Automatic retry scheduled after customer unavailable
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Step 5: Final Result */}
+                  <div className="relative">
+                    <div className={`absolute -left-[25px] top-0 h-3 w-3 rounded-full border-2 border-[hsl(var(--card))] ${
+                      selectedOrder.status === 'Confirmed'
+                        ? 'bg-emerald-500'
+                        : selectedOrder.status === 'Cancelled'
+                        ? 'bg-red-500'
+                        : 'bg-blue-500'
+                    }`} />
+                    <div className="font-semibold text-[hsl(var(--foreground))]">
+                      {selectedOrder.status === 'Confirmed' ? '5. Confirmed & Tagged in Shopify' : selectedOrder.status === 'Cancelled' ? '5. Cancelled & Tagged' : '5. In Progress'}
+                    </div>
+                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
+                      Status: {selectedOrder.status}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* WhatsApp Fallback Status */}
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-1.5">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <MessageSquare size={14} className="text-[hsl(var(--primary))]" />
+                    <span>WhatsApp Fallback (WA-AKG)</span>
+                  </div>
+                  <span className="text-[10px] font-medium text-[hsl(var(--foreground)/0.6)]">
+                    {selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer' ? 'Dispatched' : 'Standby'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-[hsl(var(--foreground)/0.7)]">
+                  {selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer'
+                    ? 'Fallback confirmation message dispatched in Roman Urdu with quick confirm/cancel buttons.'
+                    : 'Active standby — will dispatch automatically if call attempts are unanswered.'}
+                </div>
               </div>
 
               {/* Drawer Actions */}

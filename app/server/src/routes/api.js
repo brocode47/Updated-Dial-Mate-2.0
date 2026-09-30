@@ -21,11 +21,14 @@ export function apiRouter() {
 
   router.use(tenantMiddleware);
 
-  // High-level dashboard summary metrics
+  // High-level dashboard summary metrics with real-time COD KPIs
   router.get('/dashboard/stats', async (req, res) => {
     try {
       const shopRecord = req.shopRecord;
-      const [orders, customersCount, productsCount, calls, lastSyncLog] = await Promise.all([
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const [orders, customersCount, productsCount, calls, lastSyncLog, recentCalls] = await Promise.all([
         prisma.order.findMany({
           where: { shopId: shopRecord.id },
           select: { status: true, totalAmount: true, callStatus: true, createdAt: true }
@@ -34,7 +37,7 @@ export function apiRouter() {
         prisma.product.count({ where: { shopId: shopRecord.id } }),
         prisma.call.findMany({
           where: { shopId: shopRecord.id },
-          select: { outcome: true, durationSec: true }
+          select: { outcome: true, durationSec: true, createdAt: true }
         }),
         prisma.complianceLog.findFirst({
           where: {
@@ -42,30 +45,74 @@ export function apiRouter() {
             event: { contains: 'sync', mode: 'insensitive' }
           },
           orderBy: { createdAt: 'desc' }
+        }),
+        prisma.call.findMany({
+          where: { shopId: shopRecord.id },
+          include: {
+            order: {
+              include: { customer: true }
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 10
         })
       ]);
 
       const confirmed = orders.filter(o => o.status === 'Confirmed');
       const cancelled = orders.filter(o => o.status === 'Cancelled');
       const pending = orders.filter(o => o.status !== 'Confirmed' && o.status !== 'Cancelled');
-      const completedCalls = calls.filter(c => c.outcome === 'completed');
+
+      const todayOrders = orders.filter(o => new Date(o.createdAt) >= startOfToday);
+      const todayCalls = calls.filter(c => new Date(c.createdAt) >= startOfToday);
+
+      const completedCalls = calls.filter(c => c.outcome?.toLowerCase() === 'completed' || c.outcome?.toLowerCase() === 'confirmed');
+      const noAnswerCalls = calls.filter(c => ['no_answer', 'no-answer', 'busy'].includes(c.outcome?.toLowerCase()));
+      const failedCalls = calls.filter(c => ['failed', 'canceled'].includes(c.outcome?.toLowerCase()));
 
       const totalRevenue = confirmed.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-      const connectionRate = calls.length ? Math.round((completedCalls.length / calls.length) * 100) : (orders.length ? Math.round((orders.filter(o => o.callStatus === 'completed').length / orders.length) * 100) : 0);
+      const confirmationRate = orders.length ? Math.round((confirmed.length / orders.length) * 100) : 0;
+      const connectionRate = calls.length ? Math.round((completedCalls.length / calls.length) * 100) : (orders.length ? Math.round((orders.filter(o => o.callStatus === 'completed' || o.callStatus === 'confirmed').length / orders.length) * 100) : 0);
+
+      const recentActivity = recentCalls.map(c => {
+        let payload = {};
+        if (c.order?.payload) {
+          try { payload = typeof c.order.payload === 'string' ? JSON.parse(c.order.payload) : c.order.payload; } catch(_) {}
+        }
+        const customerName = c.order?.customer
+          ? `${c.order.customer.firstName || ''} ${c.order.customer.lastName || ''}`.trim() || c.order.customer.phone
+          : payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer';
+
+        return {
+          id: c.id,
+          orderId: c.orderId,
+          orderNumber: c.order?.orderNumber || payload?.name || c.orderId,
+          customerName,
+          outcome: c.outcome || 'Completed',
+          durationSec: c.durationSec || 0,
+          timestamp: c.createdAt
+        };
+      });
 
       return res.json({
         totalOrders: orders.length,
+        todayOrders: todayOrders.length,
         confirmedOrders: confirmed.length,
         cancelledOrders: cancelled.length,
         pendingOrders: pending.length,
+        callsRemaining: pending.length,
         totalRevenue,
+        confirmationRate,
         connectionRate,
         customersCount,
         productsCount,
         totalCalls: calls.length || orders.filter(o => o.callStatus && o.callStatus !== 'pending').length,
+        todayCalls: todayCalls.length,
         completedCalls: completedCalls.length,
+        noAnswerCalls: noAnswerCalls.length,
+        failedCalls: failedCalls.length,
         shopDomain: shopRecord.domain,
-        lastSyncAt: lastSyncLog?.createdAt || shopRecord.updatedAt || shopRecord.installedAt
+        lastSyncAt: lastSyncLog?.createdAt || shopRecord.updatedAt || shopRecord.installedAt,
+        recentActivity
       });
     } catch (err) {
       return res.status(500).json({ error: String(err.message || err) });
@@ -300,17 +347,46 @@ export function apiRouter() {
 
       const where = { shopId: shopRecord.id };
       if (status && status !== 'all') {
-        where.outcome = { equals: status, mode: 'insensitive' };
+        const s = String(status).toLowerCase();
+        if (s === 'confirmed') {
+          where.OR = [
+            { outcome: { in: ['confirmed', 'CONFIRMED'] } },
+            { order: { status: 'Confirmed' } }
+          ];
+        } else if (s === 'rejected') {
+          where.OR = [
+            { outcome: { in: ['rejected', 'cancelled', 'REJECTED'] } },
+            { order: { status: 'Cancelled' } }
+          ];
+        } else if (s === 'no_answer' || s === 'no-answer' || s === 'busy') {
+          where.outcome = { in: ['no_answer', 'no-answer', 'busy', 'NO_ANSWER', 'BUSY'] };
+        } else if (s === 'calling' || s === 'in-progress' || s === 'ringing') {
+          where.outcome = { in: ['calling', 'ringing', 'in-progress', 'in_progress'] };
+        } else if (s === 'queued' || s === 'pending') {
+          where.outcome = { in: ['queued', 'pending'] };
+        } else if (s === 'completed') {
+          where.outcome = { in: ['completed', 'confirmed'] };
+        } else if (s === 'failed') {
+          where.outcome = { in: ['failed', 'canceled', 'busy', 'no-answer', 'no_answer', 'FAILED'] };
+        } else {
+          where.outcome = { equals: status, mode: 'insensitive' };
+        }
       }
 
       if (search && search.trim()) {
         const q = search.trim();
-        where.OR = [
+        const searchConditions = [
           { orderId: { contains: q, mode: 'insensitive' } },
           { providerCallSid: { contains: q, mode: 'insensitive' } },
           { intent: { contains: q, mode: 'insensitive' } },
           { outcome: { contains: q, mode: 'insensitive' } }
         ];
+        if (where.OR) {
+          where.AND = [{ OR: where.OR }, { OR: searchConditions }];
+          delete where.OR;
+        } else {
+          where.OR = searchConditions;
+        }
       }
 
       const [rows, total, completedCount, failedCount] = await Promise.all([
@@ -329,7 +405,7 @@ export function apiRouter() {
         }),
         prisma.call.count({ where }),
         prisma.call.count({ where: { shopId: shopRecord.id, outcome: 'completed' } }),
-        prisma.call.count({ where: { shopId: shopRecord.id, outcome: { in: ['failed', 'busy', 'no-answer'] } } })
+        prisma.call.count({ where: { shopId: shopRecord.id, outcome: { in: ['failed', 'busy', 'no-answer', 'no_answer'] } } })
       ]);
 
       const calls = rows.map((c) => {
@@ -452,114 +528,34 @@ export function apiRouter() {
   });
 
   router.post('/orders/:orderId/call', ipRateLimiter, tenantCallRateLimiter, async (req, res) => {
-    const schema = z.object({
-      to: z.string().min(5).optional(),
-      mode: z.enum(['dry_run', 'twilio']).default('dry_run')
-    });
+    try {
+      const shopRecord = req.shopRecord;
+      const { orderId } = req.params;
 
-    const parsed = schema.safeParse(req.body || {});
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.flatten() });
-    }
+      const orderRow = await prisma.order.findUnique({
+        where: { id: orderId }
+      });
 
-    const shopRecord = req.shopRecord;
-    const { orderId } = req.params;
-
-    const orderRow = await prisma.order.findUnique({
-      where: { id: orderId } // Notice: standard Prisma might not allow composite `where: { id, shopId }` unless uniquely defined. We'll verify post-fetch.
-    });
-
-    if (!orderRow || orderRow.shopId !== shopRecord.id) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    if (!orderRow) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const payload = JSON.parse(orderRow.payload);
-
-    let phone =
-      parsed.data.to ||
-      payload?.phone ||
-      payload?.shipping_address?.phone ||
-      payload?.customer?.phone;
-
-    if (!phone) {
-      return res.status(400).json({ error: 'No phone number found' });
-    }
-
-    // ✅ Format Pakistani number
-    if (!phone.startsWith('+')) {
-      phone = '+92' + phone.replace(/^0/, '');
-    }
-
-    const customerName =
-      payload?.shipping_address?.name ||
-      payload?.customer?.first_name ||
-      'Customer';
-
-    const productName =
-      payload?.line_items?.[0]?.title || 'your product';
-
-    const productPrice =
-      payload?.current_total_price ||
-      payload?.total_price ||
-      '0';
-
-    const callId = crypto.randomUUID();
-    let providerCallSid = null;
-
-    if (parsed.data.mode === 'twilio') {
-      try {
-        const baseUrl = (process.env.APP_URL || 'http://localhost:8787').replace(/\/$/, '');
-        const from = process.env.TWILIO_FROM_NUMBER;
-
-        if (!from) {
-          return res.status(500).json({ error: 'TWILIO_FROM_NUMBER not configured' });
-        }
-
-        // ✅ Dynamic IVR URL
-        const webhookUrl =
-          `${baseUrl}/voice?name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
-
-        const statusCallbackUrl =
-          `${baseUrl}/twilio/status?shop=${encodeURIComponent(shopRecord.domain)}&orderId=${encodeURIComponent(orderId)}&callId=${encodeURIComponent(callId)}`;
-
-        const resp = await placeOutboundCall({
-          to: phone,
-          from,
-          webhookUrl,
-          statusCallbackUrl
-        });
-
-        providerCallSid = resp.sid;
-
-      } catch (error) {
-        return res.status(500).json({ error: error?.message || String(error) });
+      if (!orderRow || orderRow.shopId !== shopRecord.id) {
+        return res.status(404).json({ error: 'Order not found' });
       }
-    }
 
-    await prisma.call.create({
-      data: {
-        shopId: shopRecord.id,
+      const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+      const result = await CallWorkflowService.initiateCall({
         orderId,
-        outcome: 'Queued',
-        intent: 'Confirmation',
-        sentiment: 'Unknown',
-        providerCallSid
-      }
-    });
-
-    await prisma.complianceLog.create({
-      data: {
         shopDomain: shopRecord.domain,
-        event: 'Call queued',
-        detail: `${orderId} -> ${phone} (${parsed.data.mode})`
-      }
-    });
+        force: true // Manual merchant call
+      });
 
-    return res.json({ ok: true, callId, providerCallSid });
+      if (!result.success) {
+        return res.status(400).json({ error: result.reason || 'Failed to initiate call' });
+      }
+
+      return res.json({ ok: true, callId: result.callId, providerCallSid: result.providerCallSid });
+    } catch (err) {
+      console.error('Call initiation error:', err);
+      return res.status(500).json({ error: String(err.message || err) });
+    }
   });
   router.get('/ai/logs', async (req, res) => {
     try {
@@ -1390,6 +1386,105 @@ export function apiRouter() {
   });
 
   // ========================================================
+  // Phase 4: Automated COD Confirmation Analytics API
+  // ========================================================
+  router.get('/analytics/cod', async (req, res) => {
+    try {
+      const shopRecord = req.shopRecord;
+      const { range = '7d' } = req.query;
+
+      let sinceDate;
+      const now = new Date();
+      if (range === 'today') {
+        sinceDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      } else if (range === '30d') {
+        sinceDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      } else {
+        // default 7d
+        sinceDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      }
+
+      const [orders, calls, fallbackLogs] = await Promise.all([
+        prisma.order.findMany({
+          where: {
+            shopId: shopRecord.id,
+            createdAt: { gte: sinceDate }
+          },
+          select: {
+            id: true,
+            status: true,
+            totalAmount: true,
+            callStatus: true,
+            retryCount: true,
+            createdAt: true
+          }
+        }),
+        prisma.call.findMany({
+          where: {
+            shopId: shopRecord.id,
+            createdAt: { gte: sinceDate }
+          },
+          select: {
+            id: true,
+            outcome: true,
+            durationSec: true,
+            createdAt: true
+          }
+        }),
+        prisma.complianceLog.count({
+          where: {
+            shopDomain: shopRecord.domain,
+            event: { contains: 'whatsapp_fallback', mode: 'insensitive' },
+            createdAt: { gte: sinceDate }
+          }
+        })
+      ]);
+
+      const ordersReceived = orders.length;
+      const confirmedOrders = orders.filter(o => o.status === 'Confirmed').length;
+      const rejectedOrders = orders.filter(o => o.status === 'Cancelled').length;
+      const ordersCalled = orders.filter(o => o.callStatus && o.callStatus !== 'pending').length;
+
+      const completedCalls = calls.filter(c => ['completed', 'confirmed'].includes(c.outcome?.toLowerCase())).length;
+      const noAnswerCalls = calls.filter(c => ['no_answer', 'no-answer', 'busy', 'NO_ANSWER'].includes(c.outcome?.toLowerCase())).length;
+      const failedCalls = calls.filter(c => ['failed', 'canceled', 'FAILED'].includes(c.outcome?.toLowerCase())).length;
+
+      const confirmationRate = ordersReceived > 0 ? Math.round((confirmedOrders / ordersReceived) * 100) : 0;
+      const rejectionRate = ordersReceived > 0 ? Math.round((rejectedOrders / ordersReceived) * 100) : 0;
+      const noAnswerRate = calls.length > 0 ? Math.round((noAnswerCalls / calls.length) * 100) : 0;
+
+      const totalDuration = calls.reduce((acc, c) => acc + (c.durationSec || 0), 0);
+      const avgCallDuration = calls.length > 0 ? Math.round(totalDuration / calls.length) : 0;
+
+      const unreachableCalls = noAnswerCalls + failedCalls;
+      const whatsappFallbackRate = unreachableCalls > 0
+        ? Math.min(100, Math.round((fallbackLogs / unreachableCalls) * 100))
+        : 0;
+
+      return res.json({
+        range,
+        sinceDate,
+        ordersReceived,
+        ordersCalled,
+        confirmedOrders,
+        rejectedOrders,
+        confirmationRate,
+        rejectionRate,
+        noAnswerRate,
+        avgCallDuration,
+        successfulCalls: completedCalls,
+        failedCalls,
+        noAnswerCalls,
+        totalCalls: calls.length,
+        whatsappFallbackCount: fallbackLogs,
+        whatsappFallbackRate
+      });
+    } catch (err) {
+      return res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+
+  // ========================================================
   // Phase 3 Step 3: Shop Settings APIs
   // ========================================================
 
@@ -1429,7 +1524,22 @@ export function apiRouter() {
           workingHours: parsed.workingHours || '9:00 AM - 9:00 PM',
           escalationNumber: parsed.escalationNumber || '+923001234567'
         },
+        aiCalling: {
+          enabled: parsed.aiCalling?.enabled !== false,
+          maxAttempts: Number(parsed.aiCalling?.maxAttempts || 3),
+          retryDelayMinutes: Number(parsed.aiCalling?.retryDelayMinutes || 15),
+          callingHours: parsed.aiCalling?.callingHours || parsed.workingHours || '09:00 - 21:00',
+          language: parsed.aiCalling?.language || 'Roman Urdu & English'
+        },
+        orderRules: {
+          codOnly: parsed.orderRules?.codOnly !== false,
+          minOrderValue: Number(parsed.orderRules?.minOrderValue || 0),
+          maxOrderValue: Number(parsed.orderRules?.maxOrderValue || 500000),
+          excludedTags: parsed.orderRules?.excludedTags || 'VIP, PREPAID, NO_CALL'
+        },
         whatsapp: {
+          enableFallback: parsed.whatsapp?.enableFallback !== false,
+          templateLanguage: parsed.whatsapp?.templateLanguage || 'roman_urdu',
           isConnected: Boolean(integration?.isActive),
           sessionId: integration?.sessionId || null,
           provider: integration?.provider || 'WA-AKG',
@@ -1444,7 +1554,7 @@ export function apiRouter() {
   router.put('/shop/settings', async (req, res) => {
     try {
       const shopRecord = req.shopRecord;
-      const { profile, aiSettings, businessRules } = req.body || {};
+      const { profile, aiSettings, businessRules, aiCalling, orderRules, whatsapp } = req.body || {};
 
       const shop = await prisma.shop.findUnique({
         where: { id: shopRecord.id }
@@ -1460,7 +1570,19 @@ export function apiRouter() {
       const updatedSettings = {
         ...currentSettings,
         ...(aiSettings || {}),
-        ...(businessRules || {})
+        ...(businessRules || {}),
+        aiCalling: {
+          ...(currentSettings.aiCalling || {}),
+          ...(aiCalling || {})
+        },
+        orderRules: {
+          ...(currentSettings.orderRules || {}),
+          ...(orderRules || {})
+        },
+        whatsapp: {
+          ...(currentSettings.whatsapp || {}),
+          ...(whatsapp || {})
+        }
       };
 
       const updateData = {
@@ -1493,7 +1615,10 @@ export function apiRouter() {
         businessRules: {
           workingHours: updatedSettings.workingHours || '9:00 AM - 9:00 PM',
           escalationNumber: updatedSettings.escalationNumber || '+923001234567'
-        }
+        },
+        aiCalling: updatedSettings.aiCalling,
+        orderRules: updatedSettings.orderRules,
+        whatsapp: updatedSettings.whatsapp
       });
     } catch (err) {
       return res.status(500).json({ error: String(err.message || err) });

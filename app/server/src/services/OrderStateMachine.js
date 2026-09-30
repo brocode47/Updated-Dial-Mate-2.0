@@ -23,6 +23,15 @@ export class OrderStateMachine {
     this.expectedShopDomain = expectedShopDomain;
   }
 
+  static isValidTransition(from, to) {
+    const allowed = VALID_TRANSITIONS[from] || [];
+    return allowed.includes(to);
+  }
+
+  isValidTransition(from, to) {
+    return OrderStateMachine.isValidTransition(from, to);
+  }
+
   async transition(newStatus, reason = '') {
     const order = await prisma.order.findUnique({
       where: { id: this.orderId },

@@ -219,15 +219,18 @@ export function CallsPage() {
           <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0">
             {[
               ['all', 'All'],
-              ['completed', 'Completed'],
-              ['failed', 'Failed'],
               ['queued', 'Queued'],
-              ['in-progress', 'In-Progress']
+              ['calling', 'Calling'],
+              ['completed', 'Completed'],
+              ['confirmed', 'Confirmed'],
+              ['rejected', 'Rejected'],
+              ['no_answer', 'No Answer'],
+              ['failed', 'Failed']
             ].map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => { setFilter(key); setPage(1); }}
-                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition whitespace-nowrap ${
                   filter === key
                     ? 'bg-[hsl(var(--primary))] text-white'
                     : 'border border-[hsl(var(--border))] text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted))]'
@@ -258,26 +261,23 @@ export function CallsPage() {
             <table className="w-full text-left text-xs">
               <thead className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] text-[11px] font-bold uppercase tracking-wider text-[hsl(var(--foreground)/0.6)]">
                 <tr>
-                  <th className="py-3 px-3">Call SID / Date</th>
-                  <th className="py-3 px-3">Order</th>
                   <th className="py-3 px-3">Customer</th>
+                  <th className="py-3 px-3">Order</th>
                   <th className="py-3 px-3">Phone</th>
+                  <th className="py-3 px-3 text-center">Attempt</th>
+                  <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3">Result</th>
                   <th className="py-3 px-3">Duration</th>
-                  <th className="py-3 px-3">Outcome</th>
-                  <th className="py-3 px-3">Decision</th>
+                  <th className="py-3 px-3">Started</th>
+                  <th className="py-3 px-3">Completed</th>
                   <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[hsl(var(--border))]">
                 {calls.map((c) => (
                   <tr key={c.id} className="hover:bg-[hsl(var(--muted)/0.35)] transition-colors">
-                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
-                      <div className="font-mono text-[11px] truncate max-w-[140px]" title={c.callSid || c.id}>
-                        {c.callSid || c.id.slice(0, 12)}
-                      </div>
-                      <div className="text-[10px] text-[hsl(var(--foreground)/0.5)] font-normal">
-                        {c.createdAt ? new Date(c.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : ''}
-                      </div>
+                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground))]">
+                      {c.customerName || 'Customer'}
                     </td>
 
                     <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
@@ -289,26 +289,36 @@ export function CallsPage() {
                       ) : null}
                     </td>
 
-                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground))]">
-                      {c.customerName || 'Customer'}
-                    </td>
-
                     <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground))]">
                       {c.phone || 'No phone'}
                     </td>
 
-                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground)/0.7)]">
-                      {formatDuration(c.durationSec)}
-                    </td>
-
-                    <td className="py-3 px-3">
-                      {outcomeBadge(c.outcome)}
+                    <td className="py-3 px-3 text-center font-mono text-[11px] font-semibold text-[hsl(var(--foreground)/0.8)]">
+                      {c.retryCount !== undefined ? c.retryCount + 1 : 1}
                     </td>
 
                     <td className="py-3 px-3">
                       <span className="inline-flex rounded bg-[hsl(var(--muted))] px-2 py-0.5 text-[10px] font-semibold text-[hsl(var(--foreground)/0.8)]">
                         {c.orderStatus || 'Pending'}
                       </span>
+                    </td>
+
+                    <td className="py-3 px-3">
+                      {outcomeBadge(c.outcome)}
+                    </td>
+
+                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground)/0.7)]">
+                      {formatDuration(c.durationSec)}
+                    </td>
+
+                    <td className="py-3 px-3 text-[11px] text-[hsl(var(--foreground)/0.6)]">
+                      {c.createdAt ? new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </td>
+
+                    <td className="py-3 px-3 text-[11px] text-[hsl(var(--foreground)/0.6)]">
+                      {c.updatedAt && c.outcome !== 'queued' && c.outcome !== 'calling'
+                        ? new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '—'}
                     </td>
 
                     <td className="py-3 px-3 text-right">
@@ -326,14 +336,14 @@ export function CallsPage() {
                             onClick={() => handleRetryCall(c.orderId)}
                             disabled={callingOrderId === c.orderId}
                             className="inline-flex items-center gap-1 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-[11px] font-semibold text-[hsl(var(--foreground))] shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
-                            title="Retry outbound call"
+                            title={c.outcome === 'completed' || c.outcome === 'confirmed' ? "Place call again" : "Call Now / Retry"}
                           >
                             {callingOrderId === c.orderId ? (
                               <Loader2 size={12} className="animate-spin text-[hsl(var(--primary))]" />
                             ) : (
-                              <RotateCcw size={12} className="text-[hsl(var(--primary))]" />
+                              <PhoneCall size={12} className="text-[hsl(var(--primary))]" />
                             )}
-                            <span>Retry</span>
+                            <span>{c.outcome === 'completed' || c.outcome === 'confirmed' ? 'Call Again' : 'Call Now'}</span>
                           </button>
                         ) : null}
                       </div>

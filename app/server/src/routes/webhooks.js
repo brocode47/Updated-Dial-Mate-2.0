@@ -24,7 +24,8 @@ export async function registerWebhooksForShop({ shop, accessToken }) {
 
   const webhooks = [
     { topic: 'orders/create', address: `${baseUrl}/webhooks/orders/create` },
-    { topic: 'orders/updated', address: `${baseUrl}/webhooks/orders/updated` }
+    { topic: 'orders/updated', address: `${baseUrl}/webhooks/orders/updated` },
+    { topic: 'orders/cancelled', address: `${baseUrl}/webhooks/orders/cancelled` }
   ];
 
   for (const hook of webhooks) {
@@ -48,7 +49,7 @@ export async function registerWebhooksForShop({ shop, accessToken }) {
     data: {
       shopDomain: shop,
       event: 'Webhook registered',
-      detail: `orders/create + orders/updated -> ${baseUrl}`
+      detail: `orders/create + orders/updated + orders/cancelled -> ${baseUrl}`
     }
   });
 }
@@ -67,25 +68,50 @@ export function webhooksRouter() {
     }
   });
 
+  router.post('/orders/updated', async (req, res) => {
+    try {
+      await handleOrderWebhook(req, res, 'orders/updated');
+    } catch (error) {
+      console.error('❌ Webhook update error:', error);
+      res.status(200).send('ok');
+    }
+  });
+
+  router.post('/orders/cancelled', async (req, res) => {
+    try {
+      await handleOrderWebhook(req, res, 'orders/cancelled');
+    } catch (error) {
+      console.error('❌ Webhook cancel error:', error);
+      res.status(200).send('ok');
+    }
+  });
+
   router.post('/call-status', async (req, res) => {
     try {
       const { CallSid, CallStatus } = req.body;
       const orderId = req.query.orderId;
+      const callId = req.query.callId;
+      const durationSec = parseInt(req.body.CallDuration || req.body.Duration || '0', 10);
+      const recordingUrl = req.body.RecordingUrl || null;
 
-      console.log('📞 Twilio Status Callback');
-      console.log('Call SID:', CallSid);
-      console.log('Status:', CallStatus);
-      console.log('Order:', orderId);
+      console.log('📞 Twilio Status Callback: SID:', CallSid, 'Status:', CallStatus, 'Order:', orderId);
 
       if (orderId) {
-        await prisma.call.updateMany({
-          where: {
-            orderId: orderId
-          },
-          data: {
-            outcome: CallStatus
-          }
+        const order = await prisma.order.findUnique({
+          where: { id: String(orderId) },
+          include: { shop: true }
         });
+        if (order && order.shop) {
+          const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+          await CallWorkflowService.handleCallResult({
+            orderId: order.id,
+            shopDomain: order.shop.domain,
+            callId,
+            callStatus: CallStatus,
+            durationSec,
+            recordingUrl
+          });
+        }
       }
 
       return res.status(200).send('ok');
@@ -94,12 +120,6 @@ export function webhooksRouter() {
       console.error('❌ Call status callback error:', error);
       return res.status(200).send('ok');
     }
-  });
-
-
-    router.post('/orders/updated', async (req, res) => {
-    console.log('🔔 orders/updated received, ignored for calling');
-    return res.status(200).send('ok');
   });
 
   
@@ -204,37 +224,34 @@ export function webhooksRouter() {
   });
 
 router.get('/gather', async (req, res) => {
-  const { Digits, orderId } = req.query;
+  const { Digits, orderId, callId } = req.query;
 
-  console.log('📞 Gather received');
-  console.log('Order:', orderId);
-  console.log('Digits:', Digits);
+  console.log('📞 Gather received: Order:', orderId, 'Digits:', Digits);
+
+  if (orderId) {
+    const order = await prisma.order.findUnique({
+      where: { id: String(orderId) },
+      include: { shop: true }
+    });
+
+    if (order && order.shop) {
+      const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+      await CallWorkflowService.handleCallResult({
+        orderId: order.id,
+        shopDomain: order.shop.domain,
+        callId,
+        digits: Digits
+      });
+    }
+  }
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const response = new VoiceResponse();
 
   if (Digits === '1') {
     response.say('Shukriya. Aap ka order confirm kar diya gaya hai. Allah Hafiz.');
-
-    await prisma.order.updateMany({
-      where: { id: orderId },
-      data: {
-        status: 'Confirmed',
-        callStatus: 'confirmed'
-      }
-    });
-
   } else if (Digits === '2') {
     response.say('Aap ka order cancel kar diya gaya hai. Allah Hafiz.');
-
-    await prisma.order.updateMany({
-      where: { id: orderId },
-      data: {
-        status: 'Cancelled',
-        callStatus: 'cancelled'
-      }
-    });
-
   } else {
     response.say('Invalid choice. Allah Hafiz.');
   }

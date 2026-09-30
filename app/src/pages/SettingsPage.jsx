@@ -51,6 +51,26 @@ export function SettingsPage() {
   const [autoCallOnOrder, setAutoCallOnOrder] = React.useState(true);
   const [maxRetries, setMaxRetries] = React.useState(2);
 
+  // Phase 4: Automated AI Calling
+  const [aiCallingEnabled, setAiCallingEnabled] = React.useState(true);
+  const [maxAttempts, setMaxAttempts] = React.useState(3);
+  const [retryDelayMinutes, setRetryDelayMinutes] = React.useState(15);
+  const [callingHours, setCallingHours] = React.useState('09:00 - 21:00');
+  const [callingDays, setCallingDays] = React.useState('All Days (Mon-Sun)');
+
+  // Phase 4: Order Qualification Rules
+  const [codOnly, setCodOnly] = React.useState(true);
+  const [minOrderValue, setMinOrderValue] = React.useState(0);
+  const [maxOrderValue, setMaxOrderValue] = React.useState(500000);
+  const [excludedTags, setExcludedTags] = React.useState('VIP, PREPAID, NO_CALL');
+
+  // Phase 4: WhatsApp Fallback
+  const [enableWhatsappFallback, setEnableWhatsappFallback] = React.useState(true);
+  const [templateLanguage, setTemplateLanguage] = React.useState('roman_urdu');
+  const [customWhatsappTemplate, setCustomWhatsappTemplate] = React.useState(
+    'Assalam o Alaikum {customerName}! Aap ke order #{orderNumber} ki confirmation darkaar hai. Barah-e-karam reply kar dein ke order confirm hai ya cancel.'
+  );
+
   // WhatsApp WA-AKG Info
   const [whatsappInfo, setWhatsappInfo] = React.useState({
     isConnected: false,
@@ -90,8 +110,24 @@ export function SettingsPage() {
           if (res.businessRules.autoCallOnOrder !== undefined) setAutoCallOnOrder(Boolean(res.businessRules.autoCallOnOrder));
           if (res.businessRules.maxRetries !== undefined) setMaxRetries(Number(res.businessRules.maxRetries));
         }
+        if (res.aiCalling) {
+          if (res.aiCalling.enabled !== undefined) setAiCallingEnabled(Boolean(res.aiCalling.enabled));
+          if (res.aiCalling.maxAttempts !== undefined) setMaxAttempts(Number(res.aiCalling.maxAttempts));
+          if (res.aiCalling.retryDelayMinutes !== undefined) setRetryDelayMinutes(Number(res.aiCalling.retryDelayMinutes));
+          if (res.aiCalling.callingHours) setCallingHours(res.aiCalling.callingHours);
+          if (res.aiCalling.callingDays) setCallingDays(res.aiCalling.callingDays);
+        }
+        if (res.orderRules) {
+          if (res.orderRules.codOnly !== undefined) setCodOnly(Boolean(res.orderRules.codOnly));
+          if (res.orderRules.minOrderValue !== undefined) setMinOrderValue(Number(res.orderRules.minOrderValue));
+          if (res.orderRules.maxOrderValue !== undefined) setMaxOrderValue(Number(res.orderRules.maxOrderValue));
+          if (res.orderRules.excludedTags) setExcludedTags(res.orderRules.excludedTags);
+        }
         if (res.whatsapp) {
           setWhatsappInfo(res.whatsapp);
+          if (res.whatsapp.enableFallback !== undefined) setEnableWhatsappFallback(Boolean(res.whatsapp.enableFallback));
+          if (res.whatsapp.templateLanguage) setTemplateLanguage(res.whatsapp.templateLanguage);
+          if (res.whatsapp.customTemplate) setCustomWhatsappTemplate(res.whatsapp.customTemplate);
         }
       }
     } catch (err) {
@@ -128,6 +164,25 @@ export function SettingsPage() {
           escalationNumber: escalationNumber.trim(),
           autoCallOnOrder,
           maxRetries: Number(maxRetries)
+        },
+        aiCalling: {
+          enabled: aiCallingEnabled,
+          maxAttempts: Number(maxAttempts),
+          retryDelayMinutes: Number(retryDelayMinutes),
+          callingHours: callingHours.trim(),
+          callingDays: callingDays.trim(),
+          language: language.trim()
+        },
+        orderRules: {
+          codOnly,
+          minOrderValue: Number(minOrderValue),
+          maxOrderValue: Number(maxOrderValue),
+          excludedTags: excludedTags.trim()
+        },
+        whatsapp: {
+          enableFallback: enableWhatsappFallback,
+          templateLanguage,
+          customTemplate: customWhatsappTemplate.trim()
         }
       };
 
@@ -362,17 +417,83 @@ export function SettingsPage() {
           </div>
         </div>
 
-        {/* Section 3: Calling & Escalation Rules */}
+        {/* Section 3: Automated AI Calling Configuration */}
         <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
-          <div className="flex items-center gap-2 pb-3 border-b border-[hsl(var(--border))]">
-            <Phone size={18} className="text-[hsl(var(--primary))]" />
-            <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Calling Engine & Escalations</h2>
+          <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+            <div className="flex items-center gap-2">
+              <Phone size={18} className="text-[hsl(var(--primary))]" />
+              <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Automated AI Calling Engine</h2>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiCallingEnabled}
+                onChange={(e) => setAiCallingEnabled(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-[hsl(var(--muted))] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[hsl(var(--primary))]"></div>
+              <span className="ml-2 text-xs font-semibold text-[hsl(var(--foreground))]">
+                {aiCallingEnabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </label>
           </div>
 
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Maximum Call Attempts</label>
+              <select
+                value={maxAttempts}
+                onChange={(e) => setMaxAttempts(Number(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value={1}>1 Attempt (No retries)</option>
+                <option value={2}>2 Attempts</option>
+                <option value={3}>3 Attempts (Recommended)</option>
+                <option value={4}>4 Attempts</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Retry Delay Between Attempts</label>
+              <select
+                value={retryDelayMinutes}
+                onChange={(e) => setRetryDelayMinutes(Number(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value={10}>10 Minutes</option>
+                <option value={15}>15 Minutes (Recommended)</option>
+                <option value={30}>30 Minutes</option>
+                <option value={60}>60 Minutes (1 Hour)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Calling Hours Window</label>
+              <input
+                type="text"
+                value={callingHours}
+                onChange={(e) => setCallingHours(e.target.value)}
+                placeholder="09:00 - 21:00"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs font-mono outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Operating Calling Days</label>
+              <select
+                value={callingDays}
+                onChange={(e) => setCallingDays(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value="All Days (Mon-Sun)">All Days (Mon-Sun)</option>
+                <option value="Monday - Saturday">Monday - Saturday</option>
+                <option value="Monday - Friday">Monday - Friday</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
-                Human Agent Transfer Phone Number
+                Human Agent Escalation Phone
               </label>
               <input
                 type="text"
@@ -381,59 +502,141 @@ export function SettingsPage() {
                 placeholder="+92 300 0000000"
                 className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs font-mono outline-none focus:border-[hsl(var(--primary))] transition"
               />
-              <p className="mt-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
-                Calls where customer requests human escalation are transferred directly to this number.
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Maximum Call Retries</label>
-              <select
-                value={maxRetries}
-                onChange={(e) => setMaxRetries(Number(e.target.value))}
-                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
-              >
-                <option value={1}>1 Retry (2 Total Attempts)</option>
-                <option value={2}>2 Retries (3 Total Attempts - Recommended)</option>
-                <option value={3}>3 Retries (4 Total Attempts)</option>
-              </select>
             </div>
           </div>
         </div>
 
-        {/* Section 4: WhatsApp Integration Status */}
+        {/* Section 4: COD Order Qualification & Eligibility Rules */}
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+          <div className="flex items-center gap-2 pb-3 border-b border-[hsl(var(--border))]">
+            <Shield size={18} className="text-[hsl(var(--primary))]" />
+            <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Order Eligibility & Qualification Rules</h2>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="flex items-center gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3">
+              <input
+                type="checkbox"
+                id="codOnly"
+                checked={codOnly}
+                onChange={(e) => setCodOnly(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-[hsl(var(--primary))] focus:ring-[hsl(var(--primary))]"
+              />
+              <label htmlFor="codOnly" className="cursor-pointer">
+                <div className="text-xs font-bold text-[hsl(var(--foreground))]">Cash on Delivery (COD) Only</div>
+                <div className="text-[11px] text-[hsl(var(--foreground)/0.6)]">Skip prepaid and online paid orders</div>
+              </label>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Minimum Order Value (PKR)</label>
+              <input
+                type="number"
+                value={minOrderValue}
+                onChange={(e) => setMinOrderValue(e.target.value)}
+                placeholder="0"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs font-mono outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Maximum Order Value (PKR)</label>
+              <input
+                type="number"
+                value={maxOrderValue}
+                onChange={(e) => setMaxOrderValue(e.target.value)}
+                placeholder="500000"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs font-mono outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
+                Excluded Shopify Tags (Comma-separated)
+              </label>
+              <input
+                type="text"
+                value={excludedTags}
+                onChange={(e) => setExcludedTags(e.target.value)}
+                placeholder="VIP, PREPAID, NO_CALL, VERIFIED"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition font-mono"
+              />
+              <p className="mt-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
+                Orders containing any of these Shopify tags will be excluded from automated AI calling.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 5: WhatsApp Fallback Automation */}
         <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
           <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
             <div className="flex items-center gap-2">
               <MessageSquare size={18} className="text-[hsl(var(--primary))]" />
-              <h2 className="text-base font-bold text-[hsl(var(--foreground))]">WhatsApp (WA-AKG) Integration</h2>
+              <h2 className="text-base font-bold text-[hsl(var(--foreground))]">WhatsApp Fallback (WA-AKG)</h2>
             </div>
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                whatsappInfo.isConnected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-              }`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${whatsappInfo.isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-              {whatsappInfo.isConnected ? 'Connected' : 'Offline / Standby'}
-            </span>
+            <div className="flex items-center gap-3">
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  whatsappInfo.isConnected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${whatsappInfo.isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                {whatsappInfo.isConnected ? 'Bridge Active' : 'Standby'}
+              </span>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableWhatsappFallback}
+                  onChange={(e) => setEnableWhatsappFallback(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-[hsl(var(--muted))] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[hsl(var(--primary))]"></div>
+                <span className="ml-2 text-xs font-semibold text-[hsl(var(--foreground))]">
+                  {enableWhatsappFallback ? 'Fallback On' : 'Fallback Off'}
+                </span>
+              </label>
+            </div>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-3 text-xs">
-            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
-              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">Provider</div>
-              <div className="mt-1 font-bold text-[hsl(var(--foreground))]">{whatsappInfo.provider || 'WA-AKG'}</div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Template Language</label>
+              <select
+                value={templateLanguage}
+                onChange={(e) => setTemplateLanguage(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value="roman_urdu">Roman Urdu (Standard)</option>
+                <option value="urdu">Urdu Script</option>
+                <option value="english">English</option>
+              </select>
             </div>
 
-            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
-              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">Session ID</div>
-              <div className="mt-1 font-mono text-[hsl(var(--foreground))] truncate" title={whatsappInfo.sessionId || 'None'}>
-                {whatsappInfo.sessionId || 'Default Session'}
-              </div>
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">WA-AKG Integration Session</label>
+              <input
+                type="text"
+                readOnly
+                value={whatsappInfo.sessionId || 'Default WA-AKG Bridge'}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.5)] px-3 py-2 text-xs font-mono text-[hsl(var(--foreground)/0.7)] cursor-not-allowed"
+              />
             </div>
 
-            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
-              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">WhatsApp Bridge</div>
-              <div className="mt-1 text-emerald-600 dark:text-emerald-400 font-semibold">Active Pipeline</div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
+                Fallback WhatsApp Message Template
+              </label>
+              <textarea
+                rows={3}
+                value={customWhatsappTemplate}
+                onChange={(e) => setCustomWhatsappTemplate(e.target.value)}
+                placeholder="Assalam o Alaikum! Aap ke order #{orderNumber} ki confirmation darkaar hai..."
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-2.5 text-xs outline-none focus:border-[hsl(var(--primary))] transition font-mono leading-relaxed"
+              />
+              <p className="mt-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
+                Available variables: {'{customerName}'}, {'{orderNumber}'}, {'{orderTotal}'}, {'{shopName}'}. Dispatched when call attempts remain unanswered.
+              </p>
             </div>
           </div>
         </div>

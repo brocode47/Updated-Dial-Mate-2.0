@@ -1,76 +1,217 @@
 import { prisma } from '../lib/db.js';
 import { computeRiskScore } from '../lib/risk.js';
 import { callQueue } from '../lib/queues.js';
+import { OrderEligibilityService } from '../services/orderEligibilityService.js';
 
 export async function processWebhookJob(job) {
   const { topic, payload, shopId, webhookId } = job.data;
   
   console.log(`📦 [WebhookWorker] Processing ${topic} for shop ${shopId} (Hook ID: ${webhookId})`);
 
+  const shopRecord = await prisma.shop.findUnique({
+    where: { id: shopId }
+  });
+
+  if (!shopRecord) {
+    console.error(`❌ [WebhookWorker] Shop not found for ID: ${shopId}`);
+    return { success: false, reason: 'SHOP_NOT_FOUND' };
+  }
+
+  // 1. ORDER CREATION
   if (topic === 'orders/create') {
     const orderId = String(payload?.name || payload?.id);
-    const shopifyOrderGid = payload?.admin_graphql_api_id;
+    const shopifyOrderGid = payload?.admin_graphql_api_id || (payload?.id ? `gid://shopify/Order/${payload.id}` : null);
+    const orderNumber = String(payload?.order_number || payload?.name || orderId);
+    const totalAmount = parseFloat(payload?.current_total_price || payload?.total_price || 0);
     const riskScore = computeRiskScore(payload);
 
+    // Link or create customer
+    let customerId = null;
+    const rawPhone = payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone;
+    const cleanedPhone = OrderEligibilityService.cleanPhoneNumber(rawPhone);
+
+    if (payload?.customer?.id || cleanedPhone) {
+      try {
+        const found = await prisma.customer.findFirst({
+          where: {
+            shopId: shopRecord.id,
+            OR: [
+              ...(payload?.customer?.id ? [{ shopifyId: String(payload.customer.id) }] : []),
+              ...(cleanedPhone ? [{ phone: cleanedPhone }] : [])
+            ]
+          }
+        });
+
+        if (found) {
+          customerId = found.id;
+        } else {
+          const created = await prisma.customer.create({
+            data: {
+              shopId: shopRecord.id,
+              shopifyId: payload?.customer?.id ? String(payload.customer.id) : null,
+              firstName: payload?.customer?.first_name || payload?.shipping_address?.first_name || '',
+              lastName: payload?.customer?.last_name || payload?.shipping_address?.last_name || '',
+              email: payload?.customer?.email || payload?.email || null,
+              phone: cleanedPhone
+            }
+          });
+          customerId = created.id;
+        }
+      } catch (custErr) {
+        console.warn(`⚠️ [WebhookWorker] Customer linking warning:`, custErr.message);
+      }
+    }
+
     // Upsert the order
-    await prisma.order.upsert({
+    const orderRecord = await prisma.order.upsert({
       where: { id: orderId },
       update: {
-        payload: JSON.stringify(payload),
+        shopId: shopRecord.id,
+        customerId,
         shopifyOrderGid,
+        orderNumber,
+        payload: JSON.stringify(payload),
+        totalAmount,
         riskScore
       },
       create: {
         id: orderId,
-        shopId,
+        shopId: shopRecord.id,
+        customerId,
         shopifyOrderGid,
+        orderNumber,
         payload: JSON.stringify(payload),
         status: 'Pending Confirmation',
-        tag: 'Retry',
+        tag: 'New Order',
+        totalAmount,
         riskScore
       }
     });
 
-    const customerName =
-      payload?.shipping_address?.name ||
-      payload?.customer?.first_name ||
-      'Customer';
-
-    let phone =
-  payload?.phone ||
-  payload?.shipping_address?.phone ||
-  payload?.billing_address?.phone ||
-  payload?.customer?.phone ||
-  payload?.customer?.default_address?.phone;
-
-    if (!phone) {
-      console.log(`❌ [WebhookWorker] No phone number found for order ${orderId}`);
-      return { success: false, reason: 'No phone' };
-    }
-
-    if (!phone.startsWith('+')) {
-      phone = '+92' + phone.replace(/^0/, '');
-    }
-
-    const productName = payload?.line_items?.[0]?.title || 'your product';
-    const productPrice = payload?.total_price || '0';
-
-    console.log(`📞 [WebhookWorker] Queueing outbound call for ${orderId}`);
-    
-    // Add job to call queue
-    await callQueue.add('initiate-call', {
-      phone,
-      customerName,
-      productName,
-      productPrice,
-      orderId
-    }, {
-      jobId: `initial-call-${orderId}` // Prevents creating duplicate initial calls
+    // Check deterministic eligibility
+    const eligibility = await OrderEligibilityService.checkOrderEligibility({
+      order: orderRecord,
+      shop: shopRecord
     });
 
-    return { success: true, orderId };
+    console.log(`📋 [WebhookWorker] Eligibility for order ${orderId}:`, eligibility.eligible, eligibility.reason);
+
+    if (eligibility.eligible) {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          callStatus: 'queued',
+          tag: 'COD Confirmation Queued'
+        }
+      });
+
+      // Add job to call queue with deterministic deduplication key
+      const jobId = `call-init-${shopRecord.id}-${orderId}`;
+      await callQueue.add('initiate-call', {
+        orderId,
+        shopId: shopRecord.id,
+        shopDomain: shopRecord.domain,
+        phone: eligibility.phone,
+        customerName: eligibility.customerName,
+        productName: eligibility.productName,
+        productPrice: eligibility.productPrice
+      }, {
+        jobId // Prevents creating duplicate initial calls
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shopRecord.domain,
+          event: 'Confirmation Call Enqueued',
+          detail: `Order ${orderId} queued for call (Job: ${jobId})`
+        }
+      });
+
+      return { success: true, orderId, queued: true };
+    } else {
+      // Ineligible order
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          callStatus: 'ineligible',
+          tag: `Ineligible: ${eligibility.reason}`
+        }
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shopRecord.domain,
+          event: 'Order Call Skipped',
+          detail: `Order ${orderId} skipped: ${eligibility.reason}`
+        }
+      });
+
+      return { success: true, orderId, queued: false, reason: eligibility.reason };
+    }
   }
 
-  // Not processed/recognized topic
+  // 2. ORDER UPDATED
+  if (topic === 'orders/updated') {
+    const orderId = String(payload?.name || payload?.id);
+
+    const existing = await prisma.order.findUnique({
+      where: { id: orderId }
+    });
+
+    if (existing) {
+      let status = existing.status;
+      let callStatus = existing.callStatus;
+
+      if (payload.cancelled_at) {
+        status = 'Cancelled';
+        callStatus = 'cancelled';
+      } else if (payload.financial_status === 'paid' && status === 'Pending Confirmation') {
+        // If paid online after creation, mark confirmed
+        status = 'Confirmed';
+        callStatus = 'paid_online';
+      }
+
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          payload: JSON.stringify(payload),
+          status,
+          callStatus,
+          totalAmount: parseFloat(payload.current_total_price || payload.total_price || existing.totalAmount || 0)
+        }
+      });
+
+      console.log(`🔄 [WebhookWorker] Updated order ${orderId} (Status: ${status})`);
+    }
+
+    return { success: true, orderId, updated: Boolean(existing) };
+  }
+
+  // 3. ORDER CANCELLED
+  if (topic === 'orders/cancelled') {
+    const orderId = String(payload?.name || payload?.id);
+
+    await prisma.order.updateMany({
+      where: { id: orderId, shopId: shopRecord.id },
+      data: {
+        status: 'Cancelled',
+        callStatus: 'cancelled',
+        tag: 'Cancelled in Shopify'
+      }
+    });
+
+    await prisma.complianceLog.create({
+      data: {
+        shopDomain: shopRecord.domain,
+        event: 'Order Cancelled via Shopify Webhook',
+        detail: `Order ${orderId} marked cancelled`
+      }
+    });
+
+    console.log(`🛑 [WebhookWorker] Order ${orderId} marked cancelled via webhook`);
+    return { success: true, orderId, cancelled: true };
+  }
+
+  // Not recognized topic
   return { success: true, ignored: true, topic };
 }
