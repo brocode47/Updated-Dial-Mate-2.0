@@ -31,11 +31,26 @@ export function App() {
   const { state, dispatch } = useStore();
 
   React.useEffect(() => {
+    // 1. Detect ?token= in window.location.search (from Shopify OAuth callback)
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+
+    if (token) {
+      localStorage.setItem('dial-mate-token', token);
+      console.log('✅ [AUTH] Captured Shopify JWT token and saved to localStorage');
+
+      // Remove token query parameter from URL and set route to dashboard
+      const cleanUrl = window.location.origin + window.location.pathname + '#/dashboard';
+      window.history.replaceState({}, document.title, cleanUrl);
+      window.location.hash = '/dashboard';
+      setRoute('/dashboard');
+    } else if (!window.location.hash) {
+      const existingToken = localStorage.getItem('dial-mate-token');
+      window.location.hash = existingToken ? '/dashboard' : '/onboarding';
+    }
+
     const onHashChange = () => setRoute(hashRoute());
     window.addEventListener('hashchange', onHashChange);
-    if (!window.location.hash) {
-      window.location.hash = '/onboarding';
-    }
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 

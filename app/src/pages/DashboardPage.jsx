@@ -13,13 +13,17 @@ import {
   RefreshCcw,
   Store,
   Hash,
-  Download
+  Download,
+  Users,
+  ShoppingBag,
+  RefreshCw
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { SectionCard } from '../components/SectionCard.jsx';
 import { StatCard } from '../components/StatCard.jsx';
+import { ShopifyConnectModal } from '../components/ShopifyConnectModal.jsx';
 import { formatCurrency } from '../utils.jsx';
 import { apiClient } from '../api/client.js';
 
@@ -27,8 +31,11 @@ export function DashboardPage() {
   const { pushToast } = useToast();
 
   const [orders, setOrders] = React.useState([]);
+  const [stats, setStats] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [syncingShopify, setSyncingShopify] = React.useState(false);
+  const [isConnectModalOpen, setIsConnectModalOpen] = React.useState(false);
   const [loadingOrderId, setLoadingOrderId] = React.useState(null);
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
@@ -39,16 +46,42 @@ export function DashboardPage() {
     try {
       setRefreshing(true);
 
-      const data = await apiClient.get('/orders');
-      setOrders(data.orders || []);
+      const [ordersRes, statsRes] = await Promise.all([
+        apiClient.get('/orders').catch(() => ({ orders: [] })),
+        apiClient.get('/dashboard/stats').catch(() => null)
+      ]);
 
-      if (showToast) pushToast('Orders refreshed successfully.', 'success');
+      setOrders(ordersRes.orders || []);
+      if (statsRes) {
+        setStats(statsRes);
+      }
+
+      if (showToast) pushToast('Orders and store data refreshed successfully.', 'success');
     } catch (err) {
       console.error('❌ Failed to load orders:', err);
       pushToast('Failed to load real orders from backend.', 'error');
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function handleSyncShopify() {
+    try {
+      setSyncingShopify(true);
+      pushToast('Connecting to Shopify to fetch live orders, customers, and products...', 'default');
+      const res = await apiClient.post('/shopify/sync', {});
+      if (res.ok) {
+        const synced = res.result || {};
+        pushToast(`Synced ${synced.ordersSynced || 0} orders, ${synced.customersSynced || 0} customers, ${synced.productsSynced || 0} products!`, 'success');
+        await loadOrders(false);
+      }
+    } catch (err) {
+      console.error('Shopify sync error:', err);
+      pushToast('Sync failed: ' + (err.message || 'Please connect your Shopify store first'), 'error');
+      setIsConnectModalOpen(true);
+    } finally {
+      setSyncingShopify(false);
     }
   }
 
@@ -236,6 +269,24 @@ export function DashboardPage() {
           />
 
           <button
+            onClick={() => setIsConnectModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-700 dark:text-emerald-300 shadow-soft transition-all hover:-translate-y-0.5"
+          >
+            <Store size={16} />
+            Connect Store
+          </button>
+
+          <button
+            onClick={handleSyncShopify}
+            disabled={syncingShopify}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold shadow-soft transition-all hover:-translate-y-0.5 disabled:opacity-60"
+          >
+            {syncingShopify
+              ? (<Loader2 size={16} className="animate-spin" />) : (<RefreshCw size={16} />)}
+            Sync Shopify
+          </button>
+
+          <button
             onClick={() => loadOrders(true)}
             disabled={refreshing}
             className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold shadow-soft transition-all hover:-translate-y-0.5 disabled:opacity-60"
@@ -257,11 +308,11 @@ export function DashboardPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <StatCard icon={PhoneForwarded} label="Total orders" value={String(orders.length)} help="Orders received from Shopify" />
+        <StatCard icon={CircleDollarSign} label="Revenue" value={formatCurrency(totalRevenue)} help="Total confirmed order revenue" />
+        <StatCard icon={Users} label="Customers" value={stats?.customersCount != null ? String(stats.customersCount) : '-'} help="Total customers synced" />
+        <StatCard icon={ShoppingBag} label="Products" value={stats?.productsCount != null ? String(stats.productsCount) : '-'} help="Store catalog items synced" />
         <StatCard icon={BadgeCheck} label="Confirmed" value={String(confirmedOrders.length)} help="Orders confirmed by customer" />
-        <StatCard icon={Activity} label="Connection rate" value={connectionRate + '%'} help="Completed calls vs total orders" />
-        <StatCard icon={CircleDollarSign} label="Confirmed revenue" value={formatCurrency(totalRevenue)} help="Revenue from confirmed orders" />
-        <StatCard icon={ShieldAlert} label="Cancelled" value={String(cancelledOrders.length)} help="Orders cancelled by customer" />
-        <StatCard icon={TimerReset} label="Pending" value={String(pendingOrders.length)} help="Orders awaiting action" />
+        <StatCard icon={TimerReset} label="Pending" value={String(pendingOrders.length)} help="Orders awaiting call confirmation" />
       </div>
 
       <SectionCard title="Live orders" subtitle="Customer, product, phone, total, call status, and confirmation outcome">
@@ -305,11 +356,37 @@ export function DashboardPage() {
             Loading real orders...
           </div>
          ) : filteredOrders.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-[hsl(var(--border))] py-14 text-center">
-            <div className="text-base font-semibold">No orders found</div>
-            <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.55)]">
-              Try changing filters or refresh the dashboard.
+          <div className="rounded-3xl border border-dashed border-emerald-500/30 bg-emerald-500/5 p-8 text-center sm:p-12">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <Store size={28} />
             </div>
+            <h3 className="mt-4 text-lg font-bold text-[hsl(var(--foreground))]">
+              {orders.length === 0 ? 'Connect your Shopify store' : 'No orders found matching filters'}
+            </h3>
+            <p className="mx-auto mt-2 max-w-md text-sm text-[hsl(var(--foreground)/0.65)]">
+              {orders.length === 0
+                ? 'Authorize Dial Mate with your Shopify store to import live COD orders, automate customer confirmation calls, and sync your store catalog.'
+                : 'Try adjusting your search criteria or date filter to view orders.'}
+            </p>
+            {orders.length === 0 ? (
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={() => setIsConnectModalOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-medium hover:bg-emerald-700 transition hover:-translate-y-0.5"
+                >
+                  <Store size={16} />
+                  Connect Shopify Store
+                </button>
+                <button
+                  onClick={handleSyncShopify}
+                  disabled={syncingShopify}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-5 py-3 text-sm font-semibold hover:bg-[hsl(var(--muted))] transition"
+                >
+                  <RefreshCw size={15} className={syncingShopify ? 'animate-spin' : ''} />
+                  Sync Shopify Data
+                </button>
+              </div>
+            ) : null}
           </div>
          ) : (
           <>
@@ -478,6 +555,12 @@ export function DashboardPage() {
           </>
         )}
       </SectionCard>
+
+      <ShopifyConnectModal
+        isOpen={isConnectModalOpen}
+        onClose={() => setIsConnectModalOpen(false)}
+        defaultDomain={localStorage.getItem('dial-mate-last-shop') || ''}
+      />
     </div>
   );
 }

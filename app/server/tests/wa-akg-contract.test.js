@@ -136,7 +136,7 @@ describe('WA-AKG API Contract Mismatch Fixes', () => {
     );
   });
 
-  it('Mismatch 3 & 4: Worker extracts content instead of message, and uses key.id for media', async () => {
+  it('Mismatch 3 & 4: Worker extracts content instead of message, and sends response', async () => {
     const jobData = {
       shopDomain: 'test-shop.myshopify.com',
       sessionId: 'session-123',
@@ -148,28 +148,21 @@ describe('WA-AKG API Contract Mismatch Fixes', () => {
       }
     };
 
-    mockDownloadMedia.mockResolvedValue(Buffer.from('fake-audio'));
-    mockSendMessageAI.mockResolvedValue({ text: 'AI response' });
-
-    // Spy on ChatStateService to verify existing memory remains intact
-    const loadSpy = vi.spyOn(ChatStateService, 'load').mockResolvedValue([]);
-    const saveSpy = vi.spyOn(ChatStateService, 'save').mockResolvedValue();
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ agent: 'support', intent: 'voice_note', confidence: 0.9, response: 'AI response' })
+    });
+    global.fetch = mockFetch;
 
     await processWhatsAppJob({ data: jobData });
 
-    // Verify media download used key.id
-    expect(mockDownloadMedia).toHaveBeenCalledWith('msg-id-123');
-
-    // Verify memory still uses JID exactly
-    expect(loadSpy).toHaveBeenCalledWith('test-shop.myshopify.com:session-123:1234567890@s.whatsapp.net');
-
-    // Verify message text extraction (it would be empty for audio, but let's check what was sent to AI)
-    expect(mockSendMessageAI).toHaveBeenCalled();
-    const parts = mockSendMessageAI.mock.calls[0][0].parts;
-    expect(parts[0].inlineData).toBeDefined();
+    // Verify AI engine was called with extracted phone and voice prompt
+    expect(mockFetch).toHaveBeenCalled();
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.customer_phone).toBe('1234567890');
 
     // Verify outgoing message used correct JID
-    expect(mockSendMessage).toHaveBeenCalledWith('1234567890@s.whatsapp.net', 'AI response');
+    expect(mockSendMessage).toHaveBeenCalledWith('1234567890@s.whatsapp.net', 'AI response', expect.any(Object));
   });
   
   it('Worker correctly extracts text from payload.content', async () => {
@@ -184,11 +177,18 @@ describe('WA-AKG API Contract Mismatch Fixes', () => {
       }
     };
 
-    mockSendMessageAI.mockResolvedValue({ text: 'Sure!' });
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ agent: 'order_agent', intent: 'order_status', confidence: 0.95, response: 'Sure!' })
+    });
+    global.fetch = mockFetch;
+
     await processWhatsAppJob({ data: jobData });
 
-    const parts = mockSendMessageAI.mock.calls[mockSendMessageAI.mock.calls.length - 1][0].parts;
-    expect(parts[0].text).toBe('I want to ask about my order');
+    expect(mockFetch).toHaveBeenCalled();
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.message).toBe('I want to ask about my order');
+    expect(mockSendMessage).toHaveBeenCalledWith('1234567890@s.whatsapp.net', 'Sure!', expect.any(Object));
   });
 
   it('Missing HMAC remains rejected (Security Regression Test)', async () => {

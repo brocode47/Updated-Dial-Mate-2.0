@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { shopify, normalizeShop } from '../lib/shopify.js';
 import { prisma } from '../lib/db.js';
 import { registerWebhooksForShop } from './webhooks.js';
+import { syncShopifyData } from '../services/shopifySync.js';
 import jwt from 'jsonwebtoken';
 
 export function authRouter() {
@@ -13,7 +14,7 @@ export function authRouter() {
     console.log("SHOP PARAM:", req.query.shop);
 
     if (!req.query.shop) {
-      return res.status(400).send('❌ Missing shop parameter');
+      return res.status(400).send('❌ Missing shop parameter. Usage: /auth/shopify?shop=your-store.myshopify.com');
     }
 
     let shop;
@@ -22,18 +23,23 @@ export function authRouter() {
       shop = normalizeShop(req.query.shop);
     } catch (err) {
       console.error("SHOP NORMALIZATION ERROR:", err.message);
-      return res.status(400).send('❌ Invalid shop format. Use: your-store.myshopify.com');
+      return res.status(400).send(`❌ ${err.message || 'Invalid shop format. Use: your-store.myshopify.com'}`);
     }
 
     console.log("NORMALIZED SHOP:", shop);
 
-    await shopify.auth.begin({
-      shop,
-      callbackPath: '/auth/shopify/callback',
-      isOnline: false,
-      rawRequest: req,
-      rawResponse: res
-    });
+    try {
+      await shopify.auth.begin({
+        shop,
+        callbackPath: '/auth/shopify/callback',
+        isOnline: false,
+        rawRequest: req,
+        rawResponse: res
+      });
+    } catch (err) {
+      console.error("SHOPIFY AUTH BEGIN ERROR:", err);
+      return res.status(500).send(`❌ Failed to start Shopify authorization: ${err.message || String(err)}`);
+    }
 
     return;
   });
@@ -76,10 +82,22 @@ export function authRouter() {
         }
       });
 
-      await registerWebhooksForShop({
-        shop,
-        accessToken
-      });
+      // Register webhooks
+      try {
+        await registerWebhooksForShop({
+          shop,
+          accessToken
+        });
+      } catch (webhookErr) {
+        console.warn('⚠️ Webhook registration notice:', webhookErr.message);
+      }
+
+      // Initial Sync: Fetch real Orders, Customers, and Products from Shopify
+      try {
+        await syncShopifyData(shop);
+      } catch (syncErr) {
+        console.error('⚠️ [OAUTH CALLBACK] Initial sync notice (non-fatal):', syncErr.message);
+      }
 
       const jwtSecret = process.env.JWT_SECRET;
 
@@ -88,7 +106,7 @@ export function authRouter() {
       }
 
       const frontendUrl =
-        process.env.FRONTEND_URL || 'http://localhost:5173';
+        (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
       const token = jwt.sign(
         {
@@ -102,6 +120,7 @@ export function authRouter() {
         }
       );
 
+      console.log(`✅ [OAUTH SUCCESS] Shop ${shop} connected. Redirecting to dashboard with token.`);
       return res.redirect(`${frontendUrl}/?token=${token}`);
 
     } catch (error) {

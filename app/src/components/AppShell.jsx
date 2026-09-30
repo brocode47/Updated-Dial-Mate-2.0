@@ -19,10 +19,12 @@ import {
   UserRoundCog,
   MessageSquare,
   Users,
-  BarChart3
+  BarChart3,
+  Store
 } from 'lucide-react?deps=react';
 
 import { useStore } from '../store.jsx';
+import { ShopifyConnectModal } from './ShopifyConnectModal.jsx';
 
 const navItems = [
   { href: '#/onboarding', label: 'Onboarding', icon: Sparkles },
@@ -50,6 +52,7 @@ export function AppShell({ route, children }) {
   const { state, dispatch } = useStore();
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
+  const [connectModalOpen, setConnectModalOpen] = React.useState(false);
 
   const connected = Boolean(state.onboarding.connectedShopify);
   const shopName = state.session.shop.name || 'Your Store';
@@ -154,8 +157,18 @@ export function AppShell({ route, children }) {
             <div className="mt-3 truncate text-lg font-semibold">{shopName}</div>
             <div className="mt-1 break-all text-sm text-white/72">{shopDomain}</div>
 
-            <div className="mt-3 inline-flex rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
-              {plan} plan
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <div className="inline-flex rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
+                {plan} plan
+              </div>
+              <button
+                onClick={() => setConnectModalOpen(true)}
+                className="inline-flex items-center gap-1 rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-white/25"
+                title="Connect or switch Shopify store"
+              >
+                <Store size={12} />
+                {connected ? 'Switch' : 'Connect'}
+              </button>
             </div>
           </div>
 
@@ -230,6 +243,19 @@ export function AppShell({ route, children }) {
                   Live COD confirmation command center
                 </div>
               </div>
+
+              <button
+                onClick={() => setConnectModalOpen(true)}
+                className={`hidden sm:inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold shadow-soft transition-all hover:-translate-y-0.5 ${
+                  connected
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                    : 'border-[hsl(var(--primary)/0.3)] bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.18)]'
+                }`}
+                title={connected ? `Connected: ${shopDomain}` : 'Connect Shopify Store'}
+              >
+                <Store size={15} />
+                <span>{connected ? 'Shopify Connected' : 'Connect Store'}</span>
+              </button>
 
               <button
                 className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 shadow-soft transition-all hover:-translate-y-0.5"
@@ -322,6 +348,12 @@ export function AppShell({ route, children }) {
           </main>
         </div>
       </div>
+
+      <ShopifyConnectModal
+        isOpen={connectModalOpen}
+        onClose={() => setConnectModalOpen(false)}
+        defaultDomain={state.session?.shop?.domain}
+      />
     </div>
   );
 }

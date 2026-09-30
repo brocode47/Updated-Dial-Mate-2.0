@@ -84,8 +84,7 @@ export function OnboardingPage() {
 
     dispatch({ type: 'SET_SHOP_DOMAIN', domain: normalizedShop });
 
-    const authBase = apiClient.baseUrl.replace(/\/api$/, '');
-    window.location.href = `${authBase}/auth/shopify?shop=${encodeURIComponent(normalizedShop)}`;
+    window.location.href = apiClient.getShopifyAuthUrl(normalizedShop);
   };
 
   const handleVerify = async () => {

@@ -1,6 +1,16 @@
 export const apiClient = {
   baseUrl: import.meta.env.VITE_API_URL || '/api',
 
+  getBackendUrl() {
+    return this.baseUrl.replace(/\/api\/?$/, '');
+  },
+
+  getShopifyAuthUrl(shopDomain) {
+    const backend = this.getBackendUrl();
+    const clean = String(shopDomain || '').trim();
+    return `${backend}/auth/shopify?shop=${encodeURIComponent(clean)}`;
+  },
+
   async request(endpoint, options = {}) {
     const token = localStorage.getItem('dial-mate-token');
     

@@ -8,6 +8,8 @@ import crypto from 'crypto';
 import { config } from '../config/features.js';
 import rateLimit from 'express-rate-limit';
 
+import { syncShopifyData } from '../services/shopifySync.js';
+
 export function apiRouter() {
   const router = express.Router();
 
@@ -16,6 +18,69 @@ export function apiRouter() {
   });
 
   router.use(tenantMiddleware);
+
+  // High-level dashboard summary metrics
+  router.get('/dashboard/stats', async (req, res) => {
+    try {
+      const shopRecord = req.shopRecord;
+      const [orders, customersCount, productsCount] = await Promise.all([
+        prisma.order.findMany({
+          where: { shopId: shopRecord.id },
+          select: { status: true, totalAmount: true, callStatus: true }
+        }),
+        prisma.customer.count({ where: { shopId: shopRecord.id } }),
+        prisma.product.count({ where: { shopId: shopRecord.id } })
+      ]);
+
+      const confirmed = orders.filter(o => o.status === 'Confirmed');
+      const cancelled = orders.filter(o => o.status === 'Cancelled');
+      const pending = orders.filter(o => o.status !== 'Confirmed' && o.status !== 'Cancelled');
+      const completedCalls = orders.filter(o => o.callStatus === 'completed');
+
+      const totalRevenue = confirmed.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+      const connectionRate = orders.length ? Math.round((completedCalls.length / orders.length) * 100) : 0;
+
+      return res.json({
+        totalOrders: orders.length,
+        confirmedOrders: confirmed.length,
+        cancelledOrders: cancelled.length,
+        pendingOrders: pending.length,
+        totalRevenue,
+        connectionRate,
+        customersCount,
+        productsCount
+      });
+    } catch (err) {
+      return res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+
+  // On-demand Shopify data synchronization
+  router.post('/shopify/sync', async (req, res) => {
+    const shopRecord = req.shopRecord;
+    try {
+      const syncResult = await syncShopifyData(shopRecord.domain);
+      return res.json({ ok: true, result: syncResult });
+    } catch (err) {
+      console.error('Failed to sync Shopify data:', err);
+      return res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+
+  // Products listing from DB
+  router.get('/products', async (req, res) => {
+    try {
+      const shopRecord = req.shopRecord;
+      const products = await prisma.product.findMany({
+        where: { shopId: shopRecord.id },
+        orderBy: { updatedAt: 'desc' },
+        take: 200
+      });
+      return res.json({ products });
+    } catch (err) {
+      return res.status(500).json({ error: String(err.message || err) });
+    }
+  });
 
   router.get('/orders', async (req, res) => {
     const shopRecord = req.shopRecord;
@@ -27,27 +92,41 @@ export function apiRouter() {
     });
 
     const orders = rows.map((r) => {
-      const payload = JSON.parse(r.payload);
+      let payload = {};
+      try {
+        payload = r.payload ? (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) : {};
+      } catch (e) {
+        payload = {};
+      }
+
+      const totalVal = r.totalAmount != null ? r.totalAmount : Number(payload?.current_total_price || payload?.total_price || 0);
 
       return {
         id: r.id,
+        orderNumber: r.orderNumber || payload?.name || r.id,
         status: r.status,
         tag: r.tag,
         risk: r.riskScore,
         callStatus: r.callStatus || 'pending',
+        callSid: r.callSid,
         retryCount: r.retryCount || 0,
         whatsappSent: r.whatsappSent || 0,
 
+        shop: shopRecord.name || shopRecord.domain,
         customer: payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer',
+        customerName: payload?.shipping_address?.name || (payload?.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : '') || 'Customer',
+        productName: (payload?.line_items || [])[0]?.title || 'Order Items',
         city: payload?.shipping_address?.city || '',
         phone: payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || '',
         payment: (payload?.payment_gateway_names || []).join(', ') || 'Unknown',
-        total: Number(payload?.current_total_price || payload?.total_price || 0),
+        total: totalVal,
+        totalAmount: totalVal,
         items: (payload?.line_items || []).slice(0, 3).map((li) => ({
           title: li.title,
           variant: li.variant_title,
           qty: li.quantity
         })),
+        createdAt: r.createdAt,
         updatedAt: r.updatedAt
       };
     });

@@ -186,8 +186,7 @@ export function webhooksRouter() {
           shopId: integration.shop.id,
           shopDomain: shopDomain,
           sessionId: String(sessionId),
-          payload: payload.data,
-          traceId
+          payload: payload.data
         }, {
           jobId: messageId || undefined
         });

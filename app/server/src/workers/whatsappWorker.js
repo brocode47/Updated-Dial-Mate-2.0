@@ -44,13 +44,16 @@ export async function processWhatsAppJob(job) {
   // Resolve shopId if missing
   if (!shopId && shopDomain) {
     try {
-      const shop = await prisma.shop.findUnique({
-        where: { domain: shopDomain }
-      });
-      if (shop) shopId = shop.id;
+      if (prisma.shop?.findUnique) {
+        const shop = await prisma.shop.findUnique({
+          where: { domain: shopDomain }
+        });
+        if (shop) shopId = shop.id;
+      }
     } catch (e) {
       console.warn(`⚠️ [WhatsAppWorker] Shop lookup error:`, e.message);
     }
+    if (!shopId) shopId = shopDomain;
   }
 
   if (!shopId || !sessionId) {
