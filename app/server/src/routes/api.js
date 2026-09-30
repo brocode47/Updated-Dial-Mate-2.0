@@ -13,6 +13,8 @@ import { syncShopifyData } from '../services/shopifySync.js';
 export function apiRouter() {
   const router = express.Router();
 
+  router.use(express.json());
+
   router.get('/features', (req, res) => {
     return res.json(config);
   });

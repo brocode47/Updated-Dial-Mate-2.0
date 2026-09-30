@@ -7,7 +7,16 @@ wa.sundaybazaaar.com {
 }
 
 app.sundaybazaaar.com {
-    root * /srv/frontend
-    try_files {path} /index.html
-    file_server
+    handle /api* {
+        reverse_proxy api:8787
+    }
+    handle /auth* {
+        reverse_proxy api:8787
+    }
+    handle {
+        root * /srv/frontend
+        try_files {path} /index.html
+        file_server
+    }
 }
+

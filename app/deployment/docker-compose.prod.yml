@@ -63,6 +63,8 @@ services:
       dockerfile: Dockerfile
     container_name: dialmate_api
     restart: unless-stopped
+    ports:
+      - "8787:8787"
     environment:
       - "DOCKER_API_VERSION=1.40"
     env_file:

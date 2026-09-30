@@ -9,11 +9,10 @@ import { verifyShopifyWebhook } from '../lib/webhookVerify.js';
 import { webhookQueue, whatsappQueue } from '../lib/queues.js';
 import { waLogger } from '../utils/waLogger.js';
 
-// 📞 Twilio client
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// 📞 Twilio client (initialized only when valid AC-prefixed SID is configured)
+const client = (process.env.TWILIO_ACCOUNT_SID?.startsWith('AC') && process.env.TWILIO_AUTH_TOKEN)
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
 
 // ===============================
 // ✅ REGISTER WEBHOOKS
