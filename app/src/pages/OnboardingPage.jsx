@@ -4,304 +4,391 @@ import {
   Rocket,
   ShieldCheck,
   Webhook,
-  ExternalLink,
-  Server,
   RefreshCw,
   Loader2,
   Store,
   PhoneCall,
   Database,
-  AlertCircle
+  ArrowRight,
+  Sparkles,
+  Bot,
+  PackageCheck,
+  Users,
+  ShoppingBag
 } from 'lucide-react?deps=react';
 
 import { useStore } from '../store.jsx';
 import { useToast } from '../toast.jsx';
-import { PageHeader } from '../components/PageHeader.jsx';
-import { SectionCard } from '../components/SectionCard.jsx';
 import { apiClient } from '../api/client.js';
 
 export function OnboardingPage() {
   const { state, dispatch } = useStore();
   const { pushToast } = useToast();
 
-  const [shopDomain, setShopDomain] = React.useState(
-    state.session.shop.domain || 'bro-code-7492.myshopify.com'
-  );
-  const [checking, setChecking] = React.useState(false);
-  const [connectionStatus, setConnectionStatus] = React.useState(null);
+  const [shopDomain, setShopDomain] = React.useState('');
+  const [currentStep, setCurrentStep] = React.useState(1);
+  const [connecting, setConnecting] = React.useState(false);
+  const [syncing, setSyncing] = React.useState(false);
+  const [syncStats, setSyncStats] = React.useState(null);
+  const [verifiedShop, setVerifiedShop] = React.useState(null);
 
+  const hasToken = Boolean(typeof window !== 'undefined' && localStorage.getItem('dial-mate-token'));
+
+  // Normalize shop input
   const normalizeShop = (value) => {
-    const cleaned = String(value || '')
+    let cleaned = String(value || '')
       .trim()
+      .toLowerCase()
       .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '')
       .replace(/\/$/, '');
 
-    return cleaned.endsWith('.myshopify.com')
-      ? cleaned
-      : `${cleaned}.myshopify.com`;
+    if (!cleaned) return '';
+    return cleaned.endsWith('.myshopify.com') ? cleaned : `${cleaned}.myshopify.com`;
   };
 
-  const steps = [
-    {
-      label: 'Connect Shopify store',
-      done: connectionStatus === 'connected',
-      icon: ShieldCheck,
-      detail: 'Securely authorize Dial Mate with your Shopify store.'
-    },
-    {
-      label: 'Activate webhooks',
-      done: connectionStatus === 'connected',
-      icon: Webhook,
-      detail: 'New orders trigger confirmation calls automatically.'
-    },
-    {
-      label: 'Enable Urdu voice calling',
-      done: true,
-      icon: PhoneCall,
-      detail: 'Customers hear an Urdu confirmation prompt and press 1 or 2.'
-    },
-    {
-      label: 'Track live orders',
-      done: true,
-      icon: Database,
-      detail: 'Orders, call status, retries, and outcomes appear in the dashboard.'
-    },
-    {
-      label: 'Ready for launch',
-      done: connectionStatus === 'connected',
-      icon: Rocket,
-      detail: 'Once connected, place a test order and verify a live call.'
+  // Check if store is already connected via JWT token on load
+  React.useEffect(() => {
+    async function verifyExistingAuth() {
+      if (!hasToken) return;
+      try {
+        const stats = await apiClient.get('/dashboard/stats');
+        if (stats && stats.shopDomain) {
+          setVerifiedShop(stats.shopDomain);
+          setShopDomain(stats.shopDomain);
+          // If already connected with orders, advance to complete
+          if (stats.totalOrders > 0) {
+            setSyncStats({
+              ordersSynced: stats.totalOrders,
+              customersSynced: stats.customersCount,
+              productsSynced: stats.productsCount
+            });
+            setCurrentStep(4);
+          } else {
+            setCurrentStep(3);
+          }
+        }
+      } catch (_) {}
     }
-  ];
+    verifyExistingAuth();
+  }, [hasToken]);
 
-  const handleConnect = () => {
-    const normalizedShop = normalizeShop(shopDomain);
-
-    if (!normalizedShop || normalizedShop === '.myshopify.com') {
-      pushToast('Please enter your Shopify store domain.', 'default');
+  const handleStartOAuth = () => {
+    const normalized = normalizeShop(shopDomain);
+    if (!normalized || normalized === '.myshopify.com') {
+      pushToast('Please enter a valid Shopify store domain (e.g. your-store.myshopify.com)', 'default');
       return;
     }
 
-    dispatch({ type: 'SET_SHOP_DOMAIN', domain: normalizedShop });
+    setConnecting(true);
+    dispatch({ type: 'SET_SHOP_DOMAIN', domain: normalized });
+    localStorage.setItem('dial-mate-last-shop', normalized);
 
-    window.location.href = apiClient.getShopifyAuthUrl(normalizedShop);
+    // Direct clean redirect to backend OAuth endpoint without any SPA hash
+    const authUrl = apiClient.getShopifyAuthUrl(normalized);
+    window.location.href = authUrl;
   };
 
-  const handleVerify = async () => {
+  const handleTriggerSync = async () => {
     try {
-      setChecking(true);
-      setConnectionStatus(null);
-
-      dispatch({ type: 'SET_SHOP_DOMAIN', domain: normalizeShop(shopDomain) });
-
-      const authBase = apiClient.baseUrl.replace(/\/api$/, '');
-      const [healthRes, shopsRes] = await Promise.all([
-        apiClient.get('/health').then(() => ({ ok: true })).catch(() => ({ ok: false })),
-        fetch(`${authBase}/auth/shops`).then(r => r.ok ? r.json().then(data => ({ ok: true, data })) : { ok: false })
-      ]);
-
-      if (!healthRes.ok || !shopsRes.ok) {
-        throw new Error('Backend check failed');
-      }
-
-      const shopsData = shopsRes.data;
-
-      const normalizedShop = normalizeShop(shopDomain);
-      const isConnected = (shopsData.shops || []).some(
-        (shop) => shop.shop === normalizedShop || shop.domain === normalizedShop
-      );
-
-      if (!isConnected) {
-        setConnectionStatus('not_connected');
-        pushToast('Backend is online, but Shopify store is not connected yet.', 'default');
-        return;
-      }
-
-      setConnectionStatus('connected');
-
-      try {
-        const ordersData = await apiClient.get('/orders');
-        dispatch({
-          type: 'SYNC_DATA',
-          orders: ordersData.orders || [],
-          calls: [],
-          complianceLogs: []
+      setSyncing(true);
+      pushToast('Synchronizing orders, customers, and product catalog from Shopify...', 'default');
+      const res = await apiClient.post('/shopify/sync', {});
+      if (res && res.ok) {
+        const result = res.result || {};
+        setSyncStats({
+          ordersSynced: result.ordersSynced || 0,
+          customersSynced: result.customersSynced || 0,
+          productsSynced: result.productsSynced || 0
         });
-      } catch (err) {
-        console.error('Failed to sync orders:', err);
+        setCurrentStep(4);
+        pushToast('Store data synchronized successfully!', 'success');
+      } else {
+        throw new Error(res.error || 'Sync returned an unexpected response');
       }
-
-      pushToast('Store verified successfully.', 'success');
     } catch (err) {
-      console.error(err);
-      setConnectionStatus('error');
-      pushToast('Could not verify connection. Check backend URL and server status.', 'default');
+      pushToast(err.message || 'Synchronization failed. Please verify store connection.', 'error');
     } finally {
-      setChecking(false);
+      setSyncing(false);
     }
   };
 
+  const goToDashboard = () => {
+    window.location.hash = '/dashboard';
+  };
+
   return (
-    <div className="fade-up space-y-5 sm:space-y-6">
-      <PageHeader
-        eyebrow="Launch setup"
-        title="Connect your Shopify store"
-        description="Set up Dial Mate in a few steps. Connect your store, verify the backend, then place a test order to confirm the call flow."
-      />
+    <div className="mx-auto max-w-4xl py-6 sm:py-10">
+      {/* Onboarding Header */}
+      <div className="text-center">
+        <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--primary)/0.2)] bg-[hsl(var(--primary)/0.08)] px-3.5 py-1 text-xs font-semibold text-[hsl(var(--primary))]">
+          <Sparkles size={13} />
+          <span>Enterprise Merchant Onboarding</span>
+        </div>
+        <h1 className="mt-4 text-3xl font-extrabold tracking-tight sm:text-4xl text-[hsl(var(--foreground))]">
+          Launch Dial Mate for Shopify
+        </h1>
+        <p className="mx-auto mt-2 max-w-xl text-sm sm:text-base text-[hsl(var(--foreground)/0.65)]">
+          Automate COD order confirmation calls in natural Roman Urdu and conversational English, prevent fake deliveries, and track live customer response outcomes.
+        </p>
+      </div>
 
-      <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-        <div className="space-y-5">
-          <SectionCard title="1. Store connection" subtitle="Enter the store and backend details provided during setup">
-            <div className="space-y-4">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Shopify store domain</span>
-                <div className="relative">
-                  <Store size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                  <input
-                    type="text"
-                    value={shopDomain}
-                    onChange={(e) => setShopDomain(e.target.value)}
-                    placeholder="your-store.myshopify.com"
-                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  />
+      {/* Stepper Progress Bar */}
+      <div className="mt-8 sm:mt-12 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 sm:p-6 shadow-sm">
+        <div className="grid grid-cols-4 gap-2 sm:gap-4 text-center">
+          {[
+            { step: 1, label: 'Welcome', icon: Bot },
+            { step: 2, label: 'Connect Store', icon: Store },
+            { step: 3, label: 'Initial Sync', icon: Database },
+            { step: 4, label: 'Launch', icon: Rocket }
+          ].map((s) => {
+            const isDone = currentStep > s.step;
+            const isCurrent = currentStep === s.step;
+            const Icon = s.icon;
+
+            return (
+              <div key={s.step} className="flex flex-col items-center">
+                <div
+                  className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl transition-colors ${
+                    isDone
+                      ? 'bg-emerald-500 text-white'
+                      : isCurrent
+                      ? 'bg-[hsl(var(--primary))] text-white shadow-sm ring-4 ring-[hsl(var(--primary)/0.15)]'
+                      : 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.4)]'
+                  }`}
+                >
+                  {isDone ? <CheckCircle2 size={18} /> : <Icon size={18} />}
                 </div>
-                <span className="text-xs text-[hsl(var(--foreground)/0.55)]">
-                  Example: mehrmart.myshopify.com
+                <span className={`mt-2 text-xs font-semibold ${isCurrent ? 'text-[hsl(var(--foreground))]' : 'text-[hsl(var(--foreground)/0.5)]'}`}>
+                  {s.label}
                 </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Step Panels */}
+      <div className="mt-6 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 sm:p-8 shadow-sm">
+        {/* Step 1: Welcome */}
+        {currentStep === 1 && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">Welcome to Dial Mate AI</h2>
+              <p className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
+                Dial Mate acts as your store's dedicated Urdu voice agent. Here is how your automated workflow will work:
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] p-4">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))]">
+                  <Webhook size={18} />
+                </div>
+                <h3 className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">1. Order Webhook</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--foreground)/0.6)]">
+                  When a customer places a COD order on your Shopify store, Dial Mate receives the order securely via webhooks.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] p-4">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600">
+                  <PhoneCall size={18} />
+                </div>
+                <h3 className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">2. Urdu AI Voice Call</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--foreground)/0.6)]">
+                  The automated AI dials the Pakistani number, greets the customer in Urdu, confirms item details, and listens for confirmation or cancellation.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.35)] p-4">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[hsl(var(--secondary)/0.1)] text-[hsl(var(--secondary))]">
+                  <PackageCheck size={18} />
+                </div>
+                <h3 className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">3. Live Dashboard Updates</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--foreground)/0.6)]">
+                  Confirmed and cancelled orders update in real time with call recordings, transcript logs, and retry attempts.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-[hsl(var(--border))]">
+              <button
+                onClick={() => setCurrentStep(2)}
+                className="inline-flex items-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95 transition"
+              >
+                <span>Continue to Store Connection</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Connect Store */}
+        {currentStep === 2 && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">Connect your Shopify Store</h2>
+              <p className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
+                Enter your Shopify store domain to authorize permissions through official Shopify OAuth.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.25)] p-4 sm:p-5">
+              <label className="block text-xs font-bold uppercase tracking-wider text-[hsl(var(--foreground)/0.7)]">
+                Shopify Store Domain
               </label>
+              <div className="relative mt-2">
+                <Store size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
+                <input
+                  type="text"
+                  value={shopDomain}
+                  onChange={(e) => setShopDomain(e.target.value)}
+                  placeholder="e.g. 0qwck2-s1.myshopify.com"
+                  className="w-full rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-2.5 pl-10 pr-4 text-sm font-medium outline-none focus:border-[hsl(var(--primary))] focus:ring-2 focus:ring-[hsl(var(--primary)/0.15)] transition"
+                />
+              </div>
 
-              <div className="grid gap-2 sm:grid-cols-2">
+              {shopDomain ? (
+                <div className="mt-2 text-xs text-[hsl(var(--foreground)/0.6)]">
+                  Target: <span className="font-semibold text-[hsl(var(--primary))]">{normalizeShop(shopDomain)}</span>
+                </div>
+              ) : null}
+
+              <div className="mt-4 rounded-lg bg-[hsl(var(--primary)/0.06)] p-3 text-xs text-[hsl(var(--foreground)/0.7)]">
+                <div className="flex items-center gap-2 font-semibold text-[hsl(var(--primary))]">
+                  <ShieldCheck size={15} />
+                  <span>Verified Scopes Requested</span>
+                </div>
+                <div className="mt-1">
+                  Orders (Read & Write), Customers (Read), Products & Inventory (Read).
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-[hsl(var(--border))]">
+              <button
+                onClick={() => setCurrentStep(1)}
+                className="rounded-xl border border-[hsl(var(--border))] px-4 py-2.5 text-sm font-semibold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition"
+              >
+                Back
+              </button>
+
+              <button
+                onClick={handleStartOAuth}
+                disabled={connecting || !shopDomain.trim()}
+                className="inline-flex items-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95 transition disabled:opacity-50"
+              >
+                {connecting ? <Loader2 size={16} className="animate-spin" /> : <Store size={16} />}
+                <span>{connecting ? 'Redirecting to Shopify...' : 'Authorize with Shopify'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: Initial Sync */}
+        {currentStep === 3 && (
+          <div className="space-y-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+                <CheckCircle2 size={22} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">Shopify Store Connected!</h2>
+                <p className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
+                  {verifiedShop ? `Successfully authorized with ${verifiedShop}.` : 'Your store is authorized and linked to your tenant organization.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-5">
+              <h3 className="text-sm font-bold text-[hsl(var(--foreground))]">Initial Catalog & Order Synchronization</h3>
+              <p className="mt-1 text-xs text-[hsl(var(--foreground)/0.6)]">
+                Sync live orders, customer records, and product prices to train your Urdu AI calling engine with accurate product names and amounts.
+              </p>
+
+              <div className="mt-4 flex flex-col sm:flex-row gap-3">
                 <button
-                  onClick={handleConnect}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white shadow-medium transition-all hover:-translate-y-0.5"
+                  onClick={handleTriggerSync}
+                  disabled={syncing}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95 transition disabled:opacity-50"
                 >
-                  <ExternalLink size={16} />
-                  Connect Shopify
+                  {syncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  <span>{syncing ? 'Importing from Shopify...' : 'Start Initial Synchronization'}</span>
                 </button>
 
                 <button
-                  onClick={handleVerify}
-                  disabled={checking}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold shadow-soft disabled:opacity-50"
+                  onClick={goToDashboard}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-2.5 text-sm font-semibold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition"
                 >
-                  {checking
-                    ? (<Loader2 size={16} className="animate-spin" />) : (<RefreshCw size={16} />)}
-                  Verify setup
+                  <span>Skip to Dashboard</span>
                 </button>
               </div>
-
-              {connectionStatus === 'connected' ? (
-                <div className="flex items-start gap-3 rounded-3xl bg-emerald-500/12 p-4 text-emerald-700">
-                  <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-semibold">Store connected</div>
-                    <div className="mt-1 text-sm">
-                      Your backend, Shopify auth, and order database are connected.
-                    </div>
-                  </div>
-                </div>
-               ) : null}
-
-              {connectionStatus === 'not_connected' ? (
-                <div className="flex items-start gap-3 rounded-3xl bg-amber-500/12 p-4 text-amber-700">
-                  <AlertCircle size={18} className="mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-semibold">Shopify authorization needed</div>
-                    <div className="mt-1 text-sm">
-                      Click “Connect Shopify” and approve the app installation.
-                    </div>
-                  </div>
-                </div>
-               ) : null}
-
-              {connectionStatus === 'error' ? (
-                <div className="flex items-start gap-3 rounded-3xl bg-red-500/12 p-4 text-red-700">
-                  <AlertCircle size={18} className="mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-semibold">Connection check failed</div>
-                    <div className="mt-1 text-sm">
-                      Confirm your backend is running and your URL is correct.
-                    </div>
-                  </div>
-                </div>
-               ) : null}
             </div>
-          </SectionCard>
+          </div>
+        )}
 
-          <SectionCard title="2. Test order" subtitle="Recommended client handoff checklist">
-            <div className="space-y-3 text-sm text-[hsl(var(--foreground)/0.72)]">
-              <div className="flex gap-3 rounded-2xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <span className="font-semibold text-[hsl(var(--primary))]">1</span>
-                <span>Create a test Shopify order with a real phone number.</span>
+        {/* Step 4: Ready & Launch */}
+        {currentStep === 4 && (
+          <div className="space-y-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+                <Rocket size={22} />
               </div>
-              <div className="flex gap-3 rounded-2xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <span className="font-semibold text-[hsl(var(--primary))]">2</span>
-                <span>Answer the call and press 1 to confirm or 2 to cancel.</span>
-              </div>
-              <div className="flex gap-3 rounded-2xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <span className="font-semibold text-[hsl(var(--primary))]">3</span>
-                <span>Check Dashboard and Orders pages for updated status.</span>
+              <div>
+                <h2 className="text-xl font-bold text-[hsl(var(--foreground))]">You are Ready for Launch!</h2>
+                <p className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
+                  Your store is fully integrated and synchronized with Dial Mate.
+                </p>
               </div>
             </div>
-          </SectionCard>
-        </div>
 
-        <div className="space-y-5">
-          <SectionCard title="Launch checklist" subtitle="Simple readiness view for store owners">
-            <div className="space-y-3">
-              {steps.map((step, index) => (
-                <div key={step.label} className="flex gap-4 rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
-                  <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
-                    step.done
-                      ? 'bg-emerald-500/12 text-emerald-600'
-                      : 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.55)]'
-                  }`}>
-                    <step.icon size={18} />
-                  </div>
-
-                  <div>
-                    <div className="font-semibold">{String(index + 1)}. {step.label}</div>
-                    <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.62)]">
-                      {step.detail}
-                    </div>
-                  </div>
+            {/* Sync summary cards */}
+            {syncStats && (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 text-center shadow-xs">
+                  <div className="flex justify-center text-[hsl(var(--primary))] mb-1"><PackageCheck size={20} /></div>
+                  <div className="text-2xl font-extrabold text-[hsl(var(--foreground))]">{syncStats.ordersSynced}</div>
+                  <div className="text-xs text-[hsl(var(--foreground)/0.6)]">Orders Synced</div>
                 </div>
-              ))}
+
+                <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 text-center shadow-xs">
+                  <div className="flex justify-center text-emerald-600 mb-1"><Users size={20} /></div>
+                  <div className="text-2xl font-extrabold text-[hsl(var(--foreground))]">{syncStats.customersSynced}</div>
+                  <div className="text-xs text-[hsl(var(--foreground)/0.6)]">Customers Linked</div>
+                </div>
+
+                <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 text-center shadow-xs">
+                  <div className="flex justify-center text-[hsl(var(--accent))] mb-1"><ShoppingBag size={20} /></div>
+                  <div className="text-2xl font-extrabold text-[hsl(var(--foreground))]">{syncStats.productsSynced}</div>
+                  <div className="text-xs text-[hsl(var(--foreground)/0.6)]">Products Ready</div>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-xs text-emerald-700 dark:text-emerald-300">
+              <div className="flex items-center gap-2 font-semibold">
+                <CheckCircle2 size={16} />
+                <span>Next steps:</span>
+              </div>
+              <ul className="mt-2 list-inside list-disc space-y-1 text-emerald-700/80 dark:text-emerald-300/80">
+                <li>Go to the Dashboard to track incoming COD orders in real time.</li>
+                <li>Test an outbound call using the "Call" button on any pending order.</li>
+                <li>Configure your AI voice preferences and working hours in Settings.</li>
+              </ul>
             </div>
-          </SectionCard>
 
-          <SectionCard title="What Dial Mate does" subtitle="Client-friendly summary">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <div className="font-semibold">Automatic calls</div>
-                <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  New Shopify orders trigger Urdu confirmation calls.
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <div className="font-semibold">Customer input</div>
-                <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Customer presses 1 to confirm or 2 to cancel.
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <div className="font-semibold">Retry handling</div>
-                <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Failed or unanswered calls can retry automatically.
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <div className="font-semibold">Live dashboard</div>
-                <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Store owner can monitor every order and call outcome.
-                </div>
-              </div>
+            <div className="flex justify-end pt-4 border-t border-[hsl(var(--border))]">
+              <button
+                onClick={goToDashboard}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 transition"
+              >
+                <span>Go to Dashboard</span>
+                <ArrowRight size={16} />
+              </button>
             </div>
-          </SectionCard>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

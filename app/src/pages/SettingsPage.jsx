@@ -1,816 +1,461 @@
 import React from 'react';
 import {
-  Download,
-  LockKeyhole,
-  Shield,
-  Store,
-  Users,
-  Mic,
-  Image,
   Save,
-  Trash2,
-  CheckCircle2,
-  Database,
-  RefreshCw,
-  Building2,
-  Mail,
-  UserRoundCog,
-  Globe,
-  Phone,
-  Bell,
-  CreditCard,
+  Store,
   Bot,
+  MessageSquare,
+  Phone,
+  Shield,
+  RefreshCw,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  LogOut,
+  Building2,
   Clock,
+  Radio,
+  Sliders,
   Sparkles,
-  Wifi,
-  WifiOff
+  Wifi
 } from 'lucide-react?deps=react';
 
 import { useStore } from '../store.jsx';
 import { useToast } from '../toast.jsx';
 import { apiClient } from '../api/client.js';
-import { PageHeader } from '../components/PageHeader.jsx';
-import { SectionCard } from '../components/SectionCard.jsx';
+import { ShopifyConnectModal } from '../components/ShopifyConnectModal.jsx';
 
 export function SettingsPage() {
   const { state, dispatch } = useStore();
   const { pushToast } = useToast();
 
-  const [name, setName] = React.useState(state.session.user.name || '');
-  const [email, setEmail] = React.useState(state.session.user.email || '');
-  const [role, setRole] = React.useState(state.session.user.role || 'Owner');
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [syncing, setSyncing] = React.useState(false);
+  const [connectModalOpen, setConnectModalOpen] = React.useState(false);
 
-  const [shopName, setShopName] = React.useState(state.session.shop.name || '');
-  const [shopDomain, setShopDomain] = React.useState(state.session.shop.domain || '');
-  const [shopPlan, setShopPlan] = React.useState(state.session.shop.plan || 'Starter');
-  const [language, setLanguage] = React.useState(state.session.shop.language || 'Urdu First');
+  // Profile
+  const [shopName, setShopName] = React.useState('');
+  const [shopDomain, setShopDomain] = React.useState('');
+  const [contact, setContact] = React.useState('');
+  const [logo, setLogo] = React.useState('');
 
-  const [supportPhone, setSupportPhone] = React.useState(state.session.shop.supportPhone || '');
-  const [supportEmail, setSupportEmail] = React.useState(state.session.shop.supportEmail || '');
-  const [timezone, setTimezone] = React.useState(state.session.shop.timezone || 'Asia/Karachi');
-
-  const backendUrl = apiClient.baseUrl;
-
-  const [checking, setChecking] = React.useState(false);
-  const [backendStatus, setBackendStatus] = React.useState(null);
-
-  React.useEffect(() => {
-    setName(state.session.user.name || '');
-    setEmail(state.session.user.email || '');
-    setRole(state.session.user.role || 'Owner');
-
-    setShopName(state.session.shop.name || '');
-    setShopDomain(state.session.shop.domain || '');
-    setShopPlan(state.session.shop.plan || state.billing.currentPlan || 'Starter');
-    setLanguage(state.session.shop.language || 'Urdu First');
-
-    setSupportPhone(state.session.shop.supportPhone || '');
-    setSupportEmail(state.session.shop.supportEmail || '');
-    setTimezone(state.session.shop.timezone || 'Asia/Karachi');
-  }, [state.session.user, state.session.shop, state.billing.currentPlan]);
-
-  // Phase 3 Step 3: Module 5 AI Persona & Business Settings State
+  // AI Voice Persona
   const [aiName, setAiName] = React.useState('DialMate AI');
-  const [aiTone, setAiTone] = React.useState('Professional & Courteous');
-  const [aiLanguage, setAiLanguage] = React.useState('Roman Urdu & English');
-  const [fallbackMessage, setFallbackMessage] = React.useState('Jee, main aap ki madad ke liye hazir hoon. Aap apna sawal bata dein.');
+  const [tone, setTone] = React.useState('Professional & Courteous');
+  const [language, setLanguage] = React.useState('Roman Urdu & English');
+  const [fallbackMessage, setFallbackMessage] = React.useState('Assalam o Alaikum, main Dial Mate AI hoon.');
+
+  // Business Rules
   const [workingHours, setWorkingHours] = React.useState('9:00 AM - 9:00 PM');
   const [escalationNumber, setEscalationNumber] = React.useState('+923001234567');
-  const [whatsappInfo, setWhatsappInfo] = React.useState({ isConnected: false, sessionId: null, provider: 'WA-AKG' });
-  const [savingSettings, setSavingSettings] = React.useState(false);
+  const [autoCallOnOrder, setAutoCallOnOrder] = React.useState(true);
+  const [maxRetries, setMaxRetries] = React.useState(2);
 
-  React.useEffect(() => {
-    async function loadShopSettings() {
-      try {
-        const res = await apiClient.get('/shop/settings');
-        if (res) {
-          if (res.profile?.shopName) setShopName(res.profile.shopName);
-          if (res.profile?.contact) setSupportPhone(res.profile.contact);
-          if (res.aiSettings) {
-            if (res.aiSettings.aiName) setAiName(res.aiSettings.aiName);
-            if (res.aiSettings.tone) setAiTone(res.aiSettings.tone);
-            if (res.aiSettings.language) setAiLanguage(res.aiSettings.language);
-            if (res.aiSettings.fallbackMessage) setFallbackMessage(res.aiSettings.fallbackMessage);
-          }
-          if (res.businessRules) {
-            if (res.businessRules.workingHours) setWorkingHours(res.businessRules.workingHours);
-            if (res.businessRules.escalationNumber) setEscalationNumber(res.businessRules.escalationNumber);
-          }
-          if (res.whatsapp) {
-            setWhatsappInfo(res.whatsapp);
-          }
-        }
-      } catch (e) {
-        console.warn('Shop settings fetch notice:', e.message);
-      }
-    }
-    loadShopSettings();
-  }, []);
+  // WhatsApp WA-AKG Info
+  const [whatsappInfo, setWhatsappInfo] = React.useState({
+    isConnected: false,
+    sessionId: null,
+    provider: 'WA-AKG',
+    status: 'DISCONNECTED'
+  });
 
-  const saveAiAndBusinessSettings = async () => {
-    setSavingSettings(true);
-    try {
-      const res = await apiClient.put('/shop/settings', {
-        profile: {
-          shopName,
-          contact: supportPhone
-        },
-        aiSettings: {
-          aiName,
-          tone: aiTone,
-          language: aiLanguage,
-          fallbackMessage
-        },
-        businessRules: {
-          workingHours,
-          escalationNumber
-        }
-      });
-      if (res && res.ok) {
-        pushToast('AI Settings and Business Rules saved successfully.', 'success');
-      }
-    } catch (err) {
-      pushToast(`Failed to save settings: ${err.message}`, 'error');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
+  const hasToken = Boolean(typeof window !== 'undefined' && localStorage.getItem('dial-mate-token'));
 
-  const voices = [
-    { id: 'urdu_female_v3', label: 'Urdu Female — Warm & polite' },
-    { id: 'urdu_male_v3', label: 'Urdu Male — Confident & calm' },
-    { id: 'urdu_female_v2', label: 'Urdu Female — Fast & energetic' }
-  ];
-
-  const onPickLogo = (file) => {
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      pushToast('Please select an image file.', 'default');
+  // Load existing persistent settings from backend
+  const loadSettings = async () => {
+    if (!hasToken) {
+      setLoading(false);
       return;
     }
 
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      dispatch({ type: 'UPDATE_LOGO', logoDataUrl: String(reader.result || '') });
-      pushToast('Logo updated.', 'success');
-    };
-
-    reader.onerror = () => pushToast('Could not read that file.', 'default');
-    reader.readAsDataURL(file);
-  };
-
-  const saveAccount = () => {
-    dispatch({
-      type: 'UPDATE_ACCOUNT',
-      user: {
-        name: String(name || '').trim() || 'Store Owner',
-        email: String(email || '').trim() || 'owner@example.com',
-        role: String(role || '').trim() || 'Owner'
-      }
-    });
-
-    pushToast('Account settings saved.', 'success');
-  };
-
-  const saveStoreProfile = () => {
-    dispatch({
-      type: 'SET_SHOP_INFO',
-      shop: {
-        name: String(shopName || '').trim() || 'Your Store',
-        domain: String(shopDomain || '').trim(),
-        plan: String(shopPlan || '').trim() || 'Starter',
-        language: String(language || '').trim() || 'Urdu First',
-        supportPhone: String(supportPhone || '').trim(),
-        supportEmail: String(supportEmail || '').trim(),
-        timezone: String(timezone || '').trim() || 'Asia/Karachi'
-      }
-    });
-
-    pushToast('Store profile saved.', 'success');
-  };
-
-
-
-  const checkBackend = async () => {
     try {
-      setChecking(true);
-      setBackendStatus(null);
-
-      await apiClient.get('/health');
-
-      setBackendStatus('online');
-      pushToast('Backend is online.', 'success');
+      setLoading(true);
+      const res = await apiClient.get('/shop/settings');
+      if (res) {
+        if (res.profile) {
+          setShopName(res.profile.shopName || '');
+          setShopDomain(res.profile.shopDomain || '');
+          setContact(res.profile.contact || '');
+          setLogo(res.profile.logo || '');
+        }
+        if (res.aiSettings) {
+          if (res.aiSettings.aiName) setAiName(res.aiSettings.aiName);
+          if (res.aiSettings.tone) setTone(res.aiSettings.tone);
+          if (res.aiSettings.language) setLanguage(res.aiSettings.language);
+          if (res.aiSettings.fallbackMessage) setFallbackMessage(res.aiSettings.fallbackMessage);
+        }
+        if (res.businessRules) {
+          if (res.businessRules.workingHours) setWorkingHours(res.businessRules.workingHours);
+          if (res.businessRules.escalationNumber) setEscalationNumber(res.businessRules.escalationNumber);
+          if (res.businessRules.autoCallOnOrder !== undefined) setAutoCallOnOrder(Boolean(res.businessRules.autoCallOnOrder));
+          if (res.businessRules.maxRetries !== undefined) setMaxRetries(Number(res.businessRules.maxRetries));
+        }
+        if (res.whatsapp) {
+          setWhatsappInfo(res.whatsapp);
+        }
+      }
     } catch (err) {
-      console.error(err);
-      setBackendStatus('offline');
-      pushToast('Backend check failed.', 'error');
+      console.error('Failed to load settings:', err);
+      pushToast('Unable to load settings from server.', 'error');
     } finally {
-      setChecking(false);
+      setLoading(false);
     }
   };
 
-  const downloadSummary = () => {
-    const summary = {
-      generatedAt: new Date().toISOString(),
-      shop: state.session.shop,
-      account: state.session.user,
-      backendUrl,
-      voice: state.voice,
-      scripts: state.scripts,
-      billing: state.billing,
-      onboarding: state.onboarding
-    };
+  React.useEffect(() => {
+    loadSettings();
+  }, [hasToken]);
 
-    const blob = new Blob([JSON.stringify(summary, null, 2)], {
-      type: 'application/json'
-    });
+  const handleSaveSettings = async (e) => {
+    e?.preventDefault();
+    setSaving(true);
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    try {
+      const payload = {
+        profile: {
+          shopName: shopName.trim(),
+          contact: contact.trim(),
+          logo: logo.trim()
+        },
+        aiSettings: {
+          aiName: aiName.trim(),
+          tone: tone.trim(),
+          language: language.trim(),
+          fallbackMessage: fallbackMessage.trim()
+        },
+        businessRules: {
+          workingHours: workingHours.trim(),
+          escalationNumber: escalationNumber.trim(),
+          autoCallOnOrder,
+          maxRetries: Number(maxRetries)
+        }
+      };
 
-    a.href = url;
-    a.download = `dial-mate-settings-summary-${state.session.shop.domain || 'store'}.json`;
-
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    URL.revokeObjectURL(url);
-    pushToast('Settings summary downloaded.', 'success');
+      const res = await apiClient.put('/shop/settings', payload);
+      if (res && res.ok) {
+        pushToast('Settings saved to database successfully!', 'success');
+        dispatch({
+          type: 'SET_SHOP_INFO',
+          shop: { name: shopName, domain: shopDomain }
+        });
+      } else {
+        throw new Error(res.error || 'Server rejected settings update');
+      }
+    } catch (err) {
+      pushToast(err.message || 'Failed to save settings.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
+  const handleTriggerSync = async () => {
+    try {
+      setSyncing(true);
+      pushToast('Syncing orders, customers, and catalog from Shopify...', 'default');
+      const res = await apiClient.post('/shopify/sync', {});
+      if (res && res.ok) {
+        const synced = res.result || {};
+        pushToast(`Sync complete! ${synced.ordersSynced || 0} orders, ${synced.customersSynced || 0} customers, ${synced.productsSynced || 0} products.`, 'success');
+      }
+    } catch (err) {
+      pushToast(err.message || 'Sync failed.', 'error');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDisconnect = () => {
+    if (window.confirm('Are you sure you want to disconnect this store and sign out?')) {
+      apiClient.logout();
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 size={24} className="mx-auto animate-spin text-[hsl(var(--primary))]" />
+        <div className="mt-2 text-xs text-[hsl(var(--foreground)/0.6)]">Loading configuration from server...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="fade-up space-y-5 sm:space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <PageHeader
-          eyebrow="Configuration"
-          title="Settings"
-          description="Manage your store profile, account details, backend connection, logo, Urdu voice settings, and operational preferences."
-        />
+    <div className="space-y-6 max-w-5xl">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[hsl(var(--foreground))] md:text-3xl">
+            Platform Settings & Configuration
+          </h1>
+          <p className="mt-1 text-xs sm:text-sm text-[hsl(var(--foreground)/0.65)]">
+            Manage your Shopify connection, AI persona parameters, WhatsApp integration, and business calling rules.
+          </p>
+        </div>
 
         <button
-          onClick={downloadSummary}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white shadow-medium sm:w-auto"
+          onClick={handleSaveSettings}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:opacity-95 disabled:opacity-50 transition"
         >
-          <Download size={16} />
-          Download summary
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          <span>Save Changes</span>
         </button>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard title="Store profile" subtitle="Shown across dashboard, sidebar, exports, and client-facing settings">
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Shop name</span>
-              <div className="relative">
-                <Building2 size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <input
-                  value={shopName}
-                  onChange={(e) => setShopName(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  placeholder="Your store name"
-                />
-              </div>
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Shopify domain</span>
-              <div className="relative">
-                <Store size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <input
-                  value={shopDomain}
-                  onChange={(e) => setShopDomain(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  placeholder="your-store.myshopify.com"
-                />
-              </div>
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Current plan</span>
-                <select
-                  value={shopPlan}
-                  onChange={(e) => setShopPlan(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                >
-                  <option value="Starter">Starter</option>
-                  <option value="Growth">Growth</option>
-                  <option value="Scale">Scale</option>
-                </select>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Primary language</span>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                >
-                  <option value="Urdu First">Urdu First</option>
-                  <option value="Roman Urdu">Roman Urdu</option>
-                  <option value="English + Urdu">English + Urdu</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Support phone</span>
-                <div className="relative">
-                  <Phone size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                  <input
-                    value={supportPhone}
-                    onChange={(e) => setSupportPhone(e.target.value)}
-                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                    placeholder="+92..."
-                  />
-                </div>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Support email</span>
-                <div className="relative">
-                  <Mail size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                  <input
-                    value={supportEmail}
-                    onChange={(e) => setSupportEmail(e.target.value)}
-                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                    placeholder="support@yourstore.com"
-                  />
-                </div>
-              </label>
-            </div>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Timezone</span>
-              <div className="relative">
-                <Globe size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <select
-                  value={timezone}
-                  onChange={(e) => setTimezone(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                >
-                  <option value="Asia/Karachi">Asia/Karachi</option>
-                  <option value="Asia/Dubai">Asia/Dubai</option>
-                  <option value="Asia/Riyadh">Asia/Riyadh</option>
-                  <option value="Europe/London">Europe/London</option>
-                  <option value="America/New_York">America/New_York</option>
-                </select>
-              </div>
-            </label>
-
-            <button
-              onClick={saveStoreProfile}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
-            >
-              <Save size={16} />
-              Save store profile
-            </button>
+      <form onSubmit={handleSaveSettings} className="space-y-6">
+        {/* Section 1: Store Connection & Shopify */}
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+          <div className="flex items-center gap-2 pb-3 border-b border-[hsl(var(--border))]">
+            <Store size={18} className="text-[hsl(var(--primary))]" />
+            <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Shopify Store Connection</h2>
           </div>
-        </SectionCard>
 
-        <SectionCard title="Account settings" subtitle="Update operator profile shown in the top-right menu">
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Name</span>
-              <div className="relative">
-                <UserRoundCog size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  placeholder="Full name"
-                />
-              </div>
-            </label>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Store Name</label>
+              <input
+                type="text"
+                value={shopName}
+                onChange={(e) => setShopName(e.target.value)}
+                placeholder="e.g. My Fashion Store"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Email</span>
-              <div className="relative">
-                <Mail size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  placeholder="Email address"
-                />
-              </div>
-            </label>
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Shopify Store Domain (Read Only)</label>
+              <input
+                type="text"
+                value={shopDomain || 'Not connected'}
+                readOnly
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.5)] px-3 py-2 text-xs font-mono text-[hsl(var(--foreground)/0.7)] cursor-not-allowed"
+              />
+            </div>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Role</span>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Support Contact Phone</label>
+              <input
+                type="text"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                placeholder="+92 300 1234567"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Brand Logo URL</label>
+              <input
+                type="url"
+                value={logo}
+                onChange={(e) => setLogo(e.target.value)}
+                placeholder="https://..."
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[hsl(var(--border))]">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setConnectModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition"
               >
-                <option value="Owner">Owner</option>
-                <option value="Admin">Admin</option>
-                <option value="Operations">Operations</option>
-                <option value="Support">Support</option>
-              </select>
-            </label>
+                <Store size={13} className="text-[hsl(var(--primary))]" />
+                <span>Reconnect / Switch Shopify Store</span>
+              </button>
 
-            <button
-              onClick={saveAccount}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
-            >
-              <Save size={16} />
-              Save account
-            </button>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* Module 5: AI Settings, Business Rules & WhatsApp Session */}
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard
-          title="AI Persona & Conversation Settings"
-          subtitle="Configure DialMate AI agent identity, conversational tone, language, and fallback behavior"
-        >
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">AI Name</span>
-              <div className="relative">
-                <Bot size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                <input
-                  value={aiName}
-                  onChange={(e) => setAiName(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                  placeholder="DialMate AI"
-                />
-              </div>
-            </label>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Conversational Tone</span>
-                <select
-                  value={aiTone}
-                  onChange={(e) => setAiTone(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                >
-                  <option value="Professional & Courteous">Professional & Courteous</option>
-                  <option value="Friendly & Casual">Friendly & Casual</option>
-                  <option value="Urgent & Direct">Urgent & Direct</option>
-                </select>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Language Preference</span>
-                <select
-                  value={aiLanguage}
-                  onChange={(e) => setAiLanguage(e.target.value)}
-                  className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                >
-                  <option value="Roman Urdu & English">Roman Urdu & English</option>
-                  <option value="Urdu Script First">Urdu Script First</option>
-                  <option value="English Only">English Only</option>
-                </select>
-              </label>
+              <button
+                type="button"
+                onClick={handleTriggerSync}
+                disabled={syncing}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition disabled:opacity-50"
+              >
+                <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
+                <span>Sync Store Data Now</span>
+              </button>
             </div>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Fallback Safety Message</span>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/10 transition"
+            >
+              <LogOut size={13} />
+              <span>Disconnect & Sign Out</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Section 2: AI Voice Persona & Script Settings */}
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+          <div className="flex items-center gap-2 pb-3 border-b border-[hsl(var(--border))]">
+            <Bot size={18} className="text-[hsl(var(--primary))]" />
+            <h2 className="text-base font-bold text-[hsl(var(--foreground))]">AI Voice Persona & Dialect</h2>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">AI Agent Name</label>
+              <input
+                type="text"
+                value={aiName}
+                onChange={(e) => setAiName(e.target.value)}
+                placeholder="e.g. Zara / DialMate"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Tone of Voice</label>
+              <select
+                value={tone}
+                onChange={(e) => setTone(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value="Professional & Courteous">Professional & Courteous</option>
+                <option value="Friendly & Energetic">Friendly & Energetic</option>
+                <option value="Calm & Direct">Calm & Direct</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Spoken Language Mode</label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              >
+                <option value="Roman Urdu & English">Roman Urdu & English (Recommended for Pakistan)</option>
+                <option value="Pure Urdu">Pure Urdu</option>
+                <option value="English Only">English Only</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Calling Hours Window</label>
+              <input
+                type="text"
+                value={workingHours}
+                onChange={(e) => setWorkingHours(e.target.value)}
+                placeholder="9:00 AM - 9:00 PM PKT"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
+                Initial Greeting & Fallback Response
+              </label>
               <textarea
                 rows={2}
                 value={fallbackMessage}
                 onChange={(e) => setFallbackMessage(e.target.value)}
-                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                placeholder="Fallback response when query is outside domain..."
+                placeholder="Greeting spoken by AI when customer picks up call..."
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-2.5 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
               />
-            </label>
-
-            <button
-              onClick={saveAiAndBusinessSettings}
-              disabled={savingSettings}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
-            >
-              <Save size={16} />
-              {savingSettings ? 'Saving...' : 'Save AI settings'}
-            </button>
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Business Rules & WhatsApp AKG"
-          subtitle="Operating hours, escalation contact, and live WhatsApp gateway connection state"
-        >
-          <div className="grid gap-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Working Hours</span>
-                <div className="relative">
-                  <Clock size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                  <input
-                    value={workingHours}
-                    onChange={(e) => setWorkingHours(e.target.value)}
-                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                    placeholder="9:00 AM - 9:00 PM"
-                  />
-                </div>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-medium">Human Escalation Contact</span>
-                <div className="relative">
-                  <Phone size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-                  <input
-                    value={escalationNumber}
-                    onChange={(e) => setEscalationNumber(e.target.value)}
-                    className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-                    placeholder="+92300..."
-                  />
-                </div>
-              </label>
+              <p className="mt-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
+                This prompt introduces your brand and presents the order confirmation in natural conversational Urdu.
+              </p>
             </div>
-
-            {/* WhatsApp Integration Status Box */}
-            <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.45)] p-4 text-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 font-semibold">
-                  {whatsappInfo.isConnected ? (
-                    <Wifi size={16} className="text-emerald-500" />
-                  ) : (
-                    <WifiOff size={16} className="text-amber-500" />
-                  )}
-                  <span>WhatsApp AKG Gateway</span>
-                </div>
-
-                <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                    whatsappInfo.isConnected
-                      ? 'bg-emerald-400/20 text-emerald-500'
-                      : 'bg-amber-400/20 text-amber-500'
-                  }`}
-                >
-                  {whatsappInfo.isConnected ? 'Connected' : 'Offline / Standby'}
-                </span>
-              </div>
-
-              <div className="mt-2 text-xs text-[hsl(var(--foreground)/0.65)] space-y-1">
-                <div>Provider: <strong>{whatsappInfo.provider}</strong></div>
-                <div>Session: <strong>{whatsappInfo.sessionId || 'Default tenant session'}</strong></div>
-              </div>
-            </div>
-
-            <button
-              onClick={saveAiAndBusinessSettings}
-              disabled={savingSettings}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white sm:w-fit"
-            >
-              <Save size={16} />
-              {savingSettings ? 'Saving...' : 'Save business rules'}
-            </button>
           </div>
-        </SectionCard>
-      </div>
+        </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard title="Backend connection" subtitle="Used by dashboard, orders, calls, and onboarding">
-          <div className="space-y-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Backend API URL</span>
+        {/* Section 3: Calling & Escalation Rules */}
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+          <div className="flex items-center gap-2 pb-3 border-b border-[hsl(var(--border))]">
+            <Phone size={18} className="text-[hsl(var(--primary))]" />
+            <h2 className="text-base font-bold text-[hsl(var(--foreground))]">Calling Engine & Escalations</h2>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
+                Human Agent Transfer Phone Number
+              </label>
               <input
-                value={backendUrl}
-                readOnly
-                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-4 py-3 text-sm outline-none text-[hsl(var(--foreground)/0.65)]"
+                type="text"
+                value={escalationNumber}
+                onChange={(e) => setEscalationNumber(e.target.value)}
+                placeholder="+92 300 0000000"
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] px-3 py-2 text-xs font-mono outline-none focus:border-[hsl(var(--primary))] transition"
               />
-            </label>
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-
-              <button
-                onClick={checkBackend}
-                disabled={checking}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold disabled:opacity-50"
-              >
-                {checking
-                  ? (<RefreshCw size={16} className="animate-spin" />) : (<Database size={16} />)}
-                Test connection
-              </button>
+              <p className="mt-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
+                Calls where customer requests human escalation are transferred directly to this number.
+              </p>
             </div>
 
-            {backendStatus ? (
-              <div className={`rounded-2xl p-4 text-sm font-semibold ${
-                backendStatus === 'online'
-                  ? 'bg-emerald-500/12 text-emerald-600'
-                  : 'bg-red-500/12 text-red-600'
-              }`}>
-                {backendStatus === 'online' ? 'Backend is online' : 'Backend is offline'}
-              </div>
-             ) : null}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Branding" subtitle="Upload logo for sidebar, top menu, exports, and client handoff">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--muted))]">
-                {state.branding.logoDataUrl
-                  ? (<img src={state.branding.logoDataUrl} alt="Logo preview" className="h-full w-full object-cover" />) : (<Image size={24} className="text-[hsl(var(--foreground)/0.45)]" />)}
-              </div>
-
-              <div>
-                <div className="font-semibold">Company logo</div>
-                <div className="text-sm text-[hsl(var(--foreground)/0.62)]">PNG, JPG, or SVG</div>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold">
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => onPickLogo(e.target.files && e.target.files[0])}
-                />
-                Change logo
-              </label>
-
-              {state.branding.logoDataUrl ? (
-                <button
-                  onClick={() => {
-                    dispatch({ type: 'UPDATE_LOGO', logoDataUrl: null });
-                    pushToast('Logo removed.', 'success');
-                  }}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold"
-                >
-                  <Trash2 size={16} />
-                  Remove
-                </button>
-               ) : null}
-            </div>
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard title="Voice calling" subtitle="Choose Urdu voice persona">
-          <div className="space-y-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Voice</span>
+            <div>
+              <label className="block text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">Maximum Call Retries</label>
               <select
-                value={state.voice.voiceId}
-                onChange={(e) => {
-                  dispatch({ type: 'UPDATE_VOICE', voiceId: e.target.value });
-                  pushToast('Voice updated.', 'success');
-                }}
-                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
+                value={maxRetries}
+                onChange={(e) => setMaxRetries(Number(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
               >
-                {voices.map((v) => (
-                  <option key={v.id} value={v.id}>{v.label}</option>
-                ))}
+                <option value={1}>1 Retry (2 Total Attempts)</option>
+                <option value={2}>2 Retries (3 Total Attempts - Recommended)</option>
+                <option value={3}>3 Retries (4 Total Attempts)</option>
               </select>
-            </label>
-
-            <div className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4 text-sm">
-              <Mic size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-              <div>
-                <div className="font-semibold">Selected voice</div>
-                <div className="mt-1 break-all text-[hsl(var(--foreground)/0.65)]">
-                  {state.voice.voiceId}
-                </div>
-              </div>
             </div>
           </div>
-        </SectionCard>
+        </div>
 
-        <SectionCard title="Agent scripts" subtitle="Edit Urdu confirmation and cancellation scripts">
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Confirmation script</span>
-              <textarea
-                rows={6}
-                value={state.scripts.confirmationUrdu}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_SCRIPT',
-                    key: 'confirmationUrdu',
-                    value: e.target.value
-                  })}
-                className="w-full resize-none rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-              ></textarea>
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Cancellation script</span>
-              <textarea
-                rows={6}
-                value={state.scripts.cancellationUrdu}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_SCRIPT',
-                    key: 'cancellationUrdu',
-                    value: e.target.value
-                  })}
-                className="w-full resize-none rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm outline-none focus:border-[hsl(var(--primary))]"
-              ></textarea>
-            </label>
+        {/* Section 4: WhatsApp Integration Status */}
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+          <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+            <div className="flex items-center gap-2">
+              <MessageSquare size={18} className="text-[hsl(var(--primary))]" />
+              <h2 className="text-base font-bold text-[hsl(var(--foreground))]">WhatsApp (WA-AKG) Integration</h2>
+            </div>
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                whatsappInfo.isConnected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${whatsappInfo.isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              {whatsappInfo.isConnected ? 'Connected' : 'Offline / Standby'}
+            </span>
           </div>
-        </SectionCard>
-      </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard title="Notification preferences" subtitle="Client-facing notification settings for future email, SMS, and in-app alerts">
-          <div className="grid gap-3">
-            {[
-              ['Order created alerts', 'Notify when Shopify sends a new order webhook.'],
-              ['Failed call alerts', 'Notify when a call fails, is busy, or receives no answer.'],
-              ['Retry limit alerts', 'Notify when max retries are reached.'],
-              ['Billing alerts', 'Notify when usage approaches plan limits.']
-            ].map(([title, body]) => (
-              <div key={title} className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-                <Bell size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-                <div>
-                  <div className="font-semibold">{title}</div>
-                  <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">{body}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3 text-xs">
+            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
+              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">Provider</div>
+              <div className="mt-1 font-bold text-[hsl(var(--foreground))]">{whatsappInfo.provider || 'WA-AKG'}</div>
+            </div>
 
-        <SectionCard title="Billing and access" subtitle="Operational settings needed for a real SaaS rollout">
-          <div className="grid gap-3">
-            <div className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-              <CreditCard size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-              <div>
-                <div className="font-semibold">Active plan</div>
-                <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  {state.billing.currentPlan || shopPlan || 'Starter'} plan selected. Shopify Billing or Stripe checkout can be connected during deployment.
-                </div>
+            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
+              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">Session ID</div>
+              <div className="mt-1 font-mono text-[hsl(var(--foreground))] truncate" title={whatsappInfo.sessionId || 'None'}>
+                {whatsappInfo.sessionId || 'Default Session'}
               </div>
             </div>
 
-            <div className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-              <Users size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-              <div>
-                <div className="font-semibold">Team access</div>
-                <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Owner, Admin, Operations, and Support roles are prepared for multi-user SaaS mode.
-                </div>
-              </div>
+            <div className="rounded-lg bg-[hsl(var(--muted)/0.4)] p-3">
+              <div className="text-[hsl(var(--foreground)/0.6)] font-medium">WhatsApp Bridge</div>
+              <div className="mt-1 text-emerald-600 dark:text-emerald-400 font-semibold">Active Pipeline</div>
             </div>
           </div>
-        </SectionCard>
-      </div>
+        </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <SectionCard title="Security posture" subtitle="Audit and webhook safety">
-          <div className="space-y-3">
-            <div className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-              <Shield size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-              <div>
-                <div className="font-semibold">Webhook verification enabled</div>
-                <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Shopify webhook HMAC verification protects order events.
-                </div>
-              </div>
-            </div>
+        {/* Submit Bar */}
+        <div className="flex justify-end pt-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95 disabled:opacity-50 transition"
+          >
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            <span>Save All Configuration</span>
+          </button>
+        </div>
+      </form>
 
-            <div className="flex items-start gap-3 rounded-3xl bg-[hsl(var(--muted)/0.45)] p-4">
-              <LockKeyhole size={18} className="mt-0.5 text-[hsl(var(--primary))]" />
-              <div>
-                <div className="font-semibold">Environment secrets</div>
-                <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.65)]">
-                  Shopify and Twilio credentials remain on the backend only.
-                </div>
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Team access" subtitle="Current access list">
-          <div className="space-y-3">
-            {state.team.map((member) => (
-              <div key={member.id} className="flex flex-col gap-3 rounded-3xl border border-[hsl(var(--border))] p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--primary)/0.12)] font-semibold text-[hsl(var(--primary))]">
-                    {member.name.split(' ').map((part) => part[0]).join('')}
-                  </div>
-
-                  <div>
-                    <div className="font-semibold">{member.name}</div>
-                    <div className="text-sm text-[hsl(var(--foreground)/0.62)]">{member.role}</div>
-                  </div>
-                </div>
-
-                <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
-                  member.status === 'Active'
-                    ? 'bg-emerald-500/12 text-emerald-600'
-                    : 'bg-amber-500/12 text-amber-600'
-                }`}>
-                  {member.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
+      <ShopifyConnectModal
+        isOpen={connectModalOpen}
+        onClose={() => setConnectModalOpen(false)}
+        defaultDomain={shopDomain}
+      />
     </div>
   );
 }

@@ -1,505 +1,467 @@
 import React from 'react';
 import {
-  AudioWaveform,
-  Bot,
-  PhoneMissed,
-  UserRoundCog,
+  PhoneCall,
+  RotateCcw,
   Loader2,
   RefreshCw,
-  PhoneCall,
   Search,
-  RotateCcw,
   CheckCircle2,
   XCircle,
-  Clock3
+  Clock,
+  AudioWaveform,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  X,
+  PhoneMissed,
+  ShieldCheck,
+  AlertCircle,
+  FileText
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { SectionCard } from '../components/SectionCard.jsx';
+import { formatCurrency } from '../utils.jsx';
 import { apiClient } from '../api/client.js';
 
 export function CallsPage() {
   const { pushToast } = useToast();
 
-  const [orders, setOrders] = React.useState([]);
+  const [calls, setCalls] = React.useState([]);
+  const [stats, setStats] = React.useState({ totalCalls: 0, completedCalls: 0, failedCalls: 0, activeCalls: 0 });
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [selectedOrderId, setSelectedOrderId] = React.useState('');
-  const [search, setSearch] = React.useState('');
   const [filter, setFilter] = React.useState('all');
-  const [loadingOrderId, setLoadingOrderId] = React.useState(null);
+  const [search, setSearch] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [totalCalls, setTotalCalls] = React.useState(0);
+  const [selectedCall, setSelectedCall] = React.useState(null);
+  const [callingOrderId, setCallingOrderId] = React.useState(null);
 
-  async function loadOrders(showToast = false) {
+  const loadCalls = async (showToast = false) => {
     try {
       setRefreshing(true);
 
-      const data = await apiClient.get('/orders');
-      const liveOrders = data.orders || [];
+      const params = new URLSearchParams();
+      if (search.trim()) params.append('search', search.trim());
+      if (filter !== 'all') params.append('status', filter);
+      params.append('page', String(page));
+      params.append('limit', '25');
 
-      setOrders(liveOrders);
-
-      if (!selectedOrderId && liveOrders.length) {
-        setSelectedOrderId(liveOrders[0].id);
+      const data = await apiClient.get(`/calls?${params.toString()}`);
+      setCalls(data.calls || []);
+      setTotalCalls(data.total || 0);
+      setTotalPages(data.totalPages || 1);
+      if (data.stats) {
+        setStats(data.stats);
       }
 
-      if (showToast) {
-        pushToast('Calls refreshed successfully.', 'success');
-      }
+      if (showToast) pushToast('Calls data refreshed from backend.', 'success');
     } catch (err) {
       console.error(err);
-      pushToast('Failed to load calls from backend.', 'default');
+      pushToast(err.message || 'Failed to load calls.', 'error');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }
+  };
 
   React.useEffect(() => {
-    loadOrders();
-
-    const timer = setInterval(() => loadOrders(false), 60000);
+    loadCalls();
+    const timer = setInterval(() => loadCalls(false), 60000);
     return () => clearInterval(timer);
-  }, []);
+  }, [page, filter]);
 
-  const selectedOrder = React.useMemo(
-    () => orders.find((order) => order.id === selectedOrderId) || orders[0],
-    [orders, selectedOrderId]
-  );
-
-  const calls = orders.filter((order) => order.callSid || order.callStatus);
-
-  const completedCalls = calls.filter((order) => order.callStatus === 'completed');
-  const failedCalls = calls.filter(
-    (order) =>
-      order.callStatus === 'failed' ||
-      order.callStatus === 'busy' ||
-      order.callStatus === 'no-answer'
-  );
-  const activeCalls = calls.filter(
-    (order) =>
-      order.callStatus === 'ringing' ||
-      order.callStatus === 'in-progress' ||
-      order.callStatus === 'initiated'
-  );
-
-  const filteredCalls = calls.filter((order) => {
-    const q = search.trim().toLowerCase();
-
-    const matchesSearch =
-      !q ||
-      String(order.id || '').toLowerCase().includes(q) ||
-      String(order.shop || '').toLowerCase().includes(q) ||
-      String(order.status || '').toLowerCase().includes(q) ||
-      String(order.callStatus || '').toLowerCase().includes(q) ||
-      String(order.callSid || '').toLowerCase().includes(q);
-
-    if (!matchesSearch) return false;
-
-    if (filter === 'completed') return order.callStatus === 'completed';
-    if (filter === 'failed') {
-      return (
-        order.callStatus === 'failed' ||
-        order.callStatus === 'busy' ||
-        order.callStatus === 'no-answer'
-      );
-    }
-    if (filter === 'active') {
-      return (
-        order.callStatus === 'ringing' ||
-        order.callStatus === 'in-progress' ||
-        order.callStatus === 'initiated'
-      );
-    }
-
-    return true;
-  });
-
-  const getCallBadge = (callStatus) => {
-    if (callStatus === 'completed') return 'bg-emerald-500/12 text-emerald-600';
-    if (callStatus === 'failed' || callStatus === 'busy' || callStatus === 'no-answer') {
-      return 'bg-red-500/12 text-red-600';
-    }
-    if (callStatus === 'ringing' || callStatus === 'in-progress' || callStatus === 'initiated') {
-      return 'bg-blue-500/12 text-blue-600';
-    }
-    return 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.7)]';
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    setPage(1);
+    loadCalls();
   };
 
-  const getStatusBadge = (status) => {
-    if (status === 'Confirmed') return 'bg-emerald-500/12 text-emerald-600';
-    if (status === 'Cancelled') return 'bg-red-500/12 text-red-600';
-    return 'bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]';
-  };
-
-  const handleCallNow = async (orderId) => {
-    setLoadingOrderId(orderId);
+  const handleRetryCall = async (orderId) => {
+    if (!orderId) {
+      pushToast('No order associated with this call to retry.', 'default');
+      return;
+    }
 
     try {
-      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/call`, {});
-
-      if (!data.ok) {
-        throw new Error(data.error || 'Call failed');
+      setCallingOrderId(orderId);
+      const res = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/call`, {});
+      if (res.ok) {
+        pushToast(`Call queued for order ${orderId}`, 'success');
+        await loadCalls(false);
+      } else {
+        throw new Error(res.error || 'Failed to place call');
       }
-
-      pushToast('Call started for order ' + orderId, 'success');
-      await loadOrders(false);
     } catch (err) {
-      console.error(err);
-      pushToast(err.message || 'Call failed.', 'default');
+      pushToast(err.message || 'Call attempt failed.', 'error');
     } finally {
-      setLoadingOrderId(null);
+      setCallingOrderId(null);
     }
   };
 
-  const timeline = selectedOrder
-    ? [
-        `Order ${selectedOrder.id} received from Shopify`,
-        selectedOrder.callSid ? `Call created: ${selectedOrder.callSid}` : 'Call not started yet',
-        `Current call status: {selectedOrder.callStatus || 'pending'}`,
-        `Current confirmation status: {selectedOrder.status || 'Pending Confirmation'}`,
-        `Retry attempts: {selectedOrder.retryCount || 0}`
-      ]
-    : [];
+  const formatDuration = (sec) => {
+    if (!sec || sec <= 0) return '00:00';
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const outcomeBadge = (outcome) => {
+    const clean = String(outcome || '').toLowerCase();
+    if (clean === 'completed') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+          <CheckCircle2 size={12} />
+          Completed
+        </span>
+      );
+    }
+    if (clean === 'failed' || clean === 'busy' || clean === 'no-answer') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
+          <XCircle size={12} />
+          {outcome}
+        </span>
+      );
+    }
+    if (clean === 'ringing' || clean === 'in-progress' || clean === 'queued') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2.5 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400 animate-pulse">
+          <Clock size={12} />
+          {outcome}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[hsl(var(--muted))] px-2.5 py-0.5 text-xs font-semibold text-[hsl(var(--foreground)/0.6)]">
+        {outcome || 'Logged'}
+      </span>
+    );
+  };
 
   return (
-    <div className="fade-up space-y-5 sm:space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <PageHeader
-          eyebrow="Conversation center"
-          title="Calls, retries, and confirmation activity"
-          description="Monitor every customer call, retry status, confirmation outcome, and order timeline from one production-ready view."
-        />
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[hsl(var(--foreground))] md:text-3xl">
+            AI Voice Calls & Outcomes
+          </h1>
+          <p className="mt-1 text-xs sm:text-sm text-[hsl(var(--foreground)/0.65)]">
+            Live records of automated Twilio calls, Urdu speech recognition results, durations, and confirmation decisions.
+          </p>
+        </div>
 
         <button
-          onClick={() => loadOrders(true)}
+          onClick={() => loadCalls(true)}
           disabled={refreshing}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold shadow-soft disabled:opacity-50 sm:w-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-2 text-xs font-semibold shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
         >
-          {refreshing
-            ? (<Loader2 size={16} className="animate-spin" />) : (<RefreshCw size={16} />)}
-          Refresh
+          {refreshing ? <Loader2 size={14} className="animate-spin text-[hsl(var(--primary))]" /> : <RefreshCw size={14} />}
+          <span>Refresh Calls</span>
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Total calls</p>
-              <h3 className="mt-2 text-3xl font-bold">{calls.length}</h3>
-            </div>
-            <PhoneCall className="text-[hsl(var(--primary))]" />
+      {/* KPI Cards */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Total Calls Placed</span>
+            <PhoneCall size={16} className="text-[hsl(var(--primary))]" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-[hsl(var(--foreground))]">{stats.totalCalls}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Completed</p>
-              <h3 className="mt-2 text-3xl font-bold">{completedCalls.length}</h3>
-            </div>
-            <CheckCircle2 className="text-emerald-600" />
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Completed Calls</span>
+            <CheckCircle2 size={16} className="text-emerald-600" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats.completedCalls}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Active</p>
-              <h3 className="mt-2 text-3xl font-bold">{activeCalls.length}</h3>
-            </div>
-            <Clock3 className="text-blue-600" />
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Active / Calling</span>
+            <Clock size={16} className="text-blue-500" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-blue-600 dark:text-blue-400">{stats.activeCalls}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Failed</p>
-              <h3 className="mt-2 text-3xl font-bold">{failedCalls.length}</h3>
-            </div>
-            <PhoneMissed className="text-red-600" />
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Failed / No Answer</span>
+            <PhoneMissed size={16} className="text-red-600" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">{stats.failedCalls}</div>
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-        <SectionCard title="Recent calls" subtitle="Live call records from your backend database">
-          <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-            <div className="relative">
-              <Search size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search order, call SID, status..."
-                className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
-              />
-            </div>
+      {/* Main Calls Table Card */}
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+        {/* Toolbar */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[hsl(var(--border))]">
+          <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.4)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by order ID, customer name, phone, or SID..."
+              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] py-2 pl-9 pr-3 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
+            />
+          </form>
 
-            <div className="flex gap-2 overflow-x-auto pb-1 lg:justify-end">
-              {[
-                ['all', 'All', calls.length],
-                ['completed', 'Completed', completedCalls.length],
-                ['active', 'Active', activeCalls.length],
-                ['failed', 'Failed', failedCalls.length]
-              ].map(([key, label, count]) => (
-                <button
-                  key={key}
-                  onClick={() => setFilter(key)}
-                  className={`shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold ${
-                    filter === key
-                      ? 'bg-[hsl(var(--primary))] text-white shadow-soft'
-                      : 'border border-[hsl(var(--border))] bg-[hsl(var(--card))]'
-                  }`}
-                >
-                  {label} · {count}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="flex items-center justify-center py-14">
-              <Loader2 className="mr-2 animate-spin" size={18} />
-              Loading calls...
-            </div>
-           ) : filteredCalls.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-[hsl(var(--border))] py-14 text-center">
-              <div className="font-semibold">No calls found</div>
-              <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.55)]">
-                Place an order or manually start a call.
-              </div>
-            </div>
-           ) : (
-            <>
-            <div className="hidden overflow-hidden rounded-3xl border border-[hsl(var(--border))] lg:block">
-              <table className="w-full border-collapse text-sm">
-                <thead className="bg-[hsl(var(--muted)/0.55)] text-left text-xs uppercase tracking-[0.12em] text-[hsl(var(--foreground)/0.55)]">
-                  <tr>
-                    <th className="px-5 py-4">Order</th>
-                    <th className="px-5 py-4">Call SID</th>
-                    <th className="px-5 py-4">Call status</th>
-                    <th className="px-5 py-4">Outcome</th>
-                    <th className="px-5 py-4">Retry</th>
-                    <th className="px-5 py-4 text-right">Action</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {filteredCalls.map((order) => (
-                    <tr key={order.id} className="border-t border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-                      <td className="px-5 py-4 font-semibold">
-                        <button
-                          onClick={() => setSelectedOrderId(order.id)}
-                          className="text-left hover:text-[hsl(var(--primary))]"
-                        >
-                          {order.id}
-                        </button>
-                        <div className="mt-1 text-xs font-normal text-[hsl(var(--foreground)/0.52)]">
-                          {order.shop || 'Unknown store'}
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="max-w-[240px] truncate text-xs text-[hsl(var(--foreground)/0.64)]">
-                          {order.callSid || 'No call SID yet'}
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getCallBadge(order.callStatus)}`}>
-                          {order.callStatus || 'pending'}
-                        </span>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadge(order.status)}`}>
-                          {order.status || 'Pending'}
-                        </span>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {order.retryCount || 0}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex justify-end">
-                          <button
-                            disabled={loadingOrderId === order.id}
-                            onClick={() => handleCallNow(order.id)}
-                            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                          >
-                            {loadingOrderId === order.id
-                              ? (<Loader2 size={14} className="animate-spin" />) : (<RotateCcw size={14} />)}
-                            Retry
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="grid gap-4 lg:hidden">
-              {filteredCalls.map((order) => (
-                <button
-                  key={order.id}
-                  onClick={() => setSelectedOrderId(order.id)}
-                  className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 text-left shadow-soft"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-lg font-semibold">{order.id}</div>
-                      <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.62)]">
-                        {order.shop || 'Unknown store'}
-                      </div>
-                    </div>
-
-                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getCallBadge(order.callStatus)}`}>
-                      {order.callStatus || 'pending'}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl bg-[hsl(var(--muted)/0.45)] p-3">
-                      <div className="text-xs uppercase tracking-[0.1em] text-[hsl(var(--foreground)/0.45)]">Outcome</div>
-                      <div className="mt-1 text-sm font-semibold">{order.status || 'Pending'}</div>
-                    </div>
-
-                    <div className="rounded-2xl bg-[hsl(var(--muted)/0.45)] p-3">
-                      <div className="text-xs uppercase tracking-[0.1em] text-[hsl(var(--foreground)/0.45)]">Retry</div>
-                      <div className="mt-1 text-sm font-semibold">{order.retryCount || 0}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 break-all rounded-2xl bg-[hsl(var(--muted)/0.35)] p-3 text-xs text-[hsl(var(--foreground)/0.58)]">
-                    {order.callSid || 'No call SID yet'}
-                  </div>
-                </button>
-              ))}
-            </div>
-            </>
-          )}
-        </SectionCard>
-
-        <div className="space-y-5">
-          <SectionCard
-            title="Call detail"
-            subtitle="Production call metadata for selected order"
-            action={(
-              <select
-                value={selectedOrder?.id || ''}
-                onChange={(event) => setSelectedOrderId(event.target.value)}
-                className="max-w-full rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm"
+          {/* Filter Pills */}
+          <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0">
+            {[
+              ['all', 'All'],
+              ['completed', 'Completed'],
+              ['failed', 'Failed'],
+              ['queued', 'Queued'],
+              ['in-progress', 'In-Progress']
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => { setFilter(key); setPage(1); }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                  filter === key
+                    ? 'bg-[hsl(var(--primary))] text-white'
+                    : 'border border-[hsl(var(--border))] text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted))]'
+                }`}
               >
-                {orders.map((order) => (
-                  <option key={order.id} value={order.id}>{order.id}</option>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Table View */}
+        {loading ? (
+          <div className="py-20 text-center">
+            <Loader2 size={24} className="mx-auto animate-spin text-[hsl(var(--primary))]" />
+            <div className="mt-2 text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Loading calls from database...</div>
+          </div>
+        ) : calls.length === 0 ? (
+          <div className="py-16 text-center">
+            <PhoneCall size={36} className="mx-auto text-[hsl(var(--foreground)/0.3)]" />
+            <div className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">No call records found</div>
+            <div className="mt-1 text-xs text-[hsl(var(--foreground)/0.6)]">
+              Outbound confirmation calls will be tracked here automatically when orders are processed.
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] text-[11px] font-bold uppercase tracking-wider text-[hsl(var(--foreground)/0.6)]">
+                <tr>
+                  <th className="py-3 px-3">Call SID / Date</th>
+                  <th className="py-3 px-3">Order</th>
+                  <th className="py-3 px-3">Customer</th>
+                  <th className="py-3 px-3">Phone</th>
+                  <th className="py-3 px-3">Duration</th>
+                  <th className="py-3 px-3">Outcome</th>
+                  <th className="py-3 px-3">Decision</th>
+                  <th className="py-3 px-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[hsl(var(--border))]">
+                {calls.map((c) => (
+                  <tr key={c.id} className="hover:bg-[hsl(var(--muted)/0.35)] transition-colors">
+                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
+                      <div className="font-mono text-[11px] truncate max-w-[140px]" title={c.callSid || c.id}>
+                        {c.callSid || c.id.slice(0, 12)}
+                      </div>
+                      <div className="text-[10px] text-[hsl(var(--foreground)/0.5)] font-normal">
+                        {c.createdAt ? new Date(c.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : ''}
+                      </div>
+                    </td>
+
+                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
+                      {c.orderNumber || c.orderId || 'Direct'}
+                      {c.totalAmount ? (
+                        <div className="text-[10px] text-[hsl(var(--foreground)/0.5)] font-normal font-mono">
+                          {formatCurrency(c.totalAmount)}
+                        </div>
+                      ) : null}
+                    </td>
+
+                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground))]">
+                      {c.customerName || 'Customer'}
+                    </td>
+
+                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground))]">
+                      {c.phone || 'No phone'}
+                    </td>
+
+                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground)/0.7)]">
+                      {formatDuration(c.durationSec)}
+                    </td>
+
+                    <td className="py-3 px-3">
+                      {outcomeBadge(c.outcome)}
+                    </td>
+
+                    <td className="py-3 px-3">
+                      <span className="inline-flex rounded bg-[hsl(var(--muted))] px-2 py-0.5 text-[10px] font-semibold text-[hsl(var(--foreground)/0.8)]">
+                        {c.orderStatus || 'Pending'}
+                      </span>
+                    </td>
+
+                    <td className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setSelectedCall(c)}
+                          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1.5 text-[hsl(var(--foreground)/0.7)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] shadow-xs transition"
+                          title="View Call Details & Transcript"
+                        >
+                          <Eye size={13} />
+                        </button>
+
+                        {c.orderId ? (
+                          <button
+                            onClick={() => handleRetryCall(c.orderId)}
+                            disabled={callingOrderId === c.orderId}
+                            className="inline-flex items-center gap-1 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-[11px] font-semibold text-[hsl(var(--foreground))] shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
+                            title="Retry outbound call"
+                          >
+                            {callingOrderId === c.orderId ? (
+                              <Loader2 size={12} className="animate-spin text-[hsl(var(--primary))]" />
+                            ) : (
+                              <RotateCcw size={12} className="text-[hsl(var(--primary))]" />
+                            )}
+                            <span>Retry</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
                 ))}
-              </select>
-            )}
-          >
-            {selectedOrder ? (
-              <>
-              <div className="rounded-3xl bg-[hsl(var(--secondary))] p-5 text-white">
-                <div className="flex flex-wrap items-center gap-2 text-sm text-white/75">
-                  <AudioWaveform size={16} />
-                  {selectedOrder.callSid || 'No call has been created for this order yet'}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination Bar */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between pt-4 border-t border-[hsl(var(--border))] mt-4 text-xs text-[hsl(var(--foreground)/0.6)]">
+            <div>
+              Showing page <span className="font-semibold text-[hsl(var(--foreground))]">{page}</span> of{' '}
+              <span className="font-semibold text-[hsl(var(--foreground))]">{totalPages}</span> ({totalCalls} calls)
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
+              >
+                <ChevronLeft size={15} />
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Call Details Modal */}
+      {selectedCall ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="relative w-full max-w-lg rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+              <div className="flex items-center gap-2">
+                <AudioWaveform size={18} className="text-[hsl(var(--primary))]" />
+                <span className="text-base font-bold text-[hsl(var(--foreground))]">Call Session Details</span>
+              </div>
+              <button
+                onClick={() => setSelectedCall(null)}
+                className="rounded-lg p-1 text-[hsl(var(--foreground)/0.5)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs">
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-3 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Customer:</span>
+                  <span className="font-semibold text-[hsl(var(--foreground))]">{selectedCall.customerName}</span>
                 </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-white/10 p-4">
-                    <div className="text-xs uppercase tracking-[0.12em] text-white/60">Call status</div>
-                    <div className="mt-1 text-lg font-semibold">{selectedOrder.callStatus || 'pending'}</div>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/10 p-4">
-                    <div className="text-xs uppercase tracking-[0.12em] text-white/60">Order result</div>
-                    <div className="mt-1 text-lg font-semibold">{selectedOrder.status || 'Pending'}</div>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/10 p-4">
-                    <div className="text-xs uppercase tracking-[0.12em] text-white/60">Retries</div>
-                    <div className="mt-1 text-lg font-semibold">{selectedOrder.retryCount || 0}</div>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/10 p-4">
-                    <div className="text-xs uppercase tracking-[0.12em] text-white/60">Tag</div>
-                    <div className="mt-1 text-lg font-semibold">{selectedOrder.tag || 'None'}</div>
-                  </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Phone Number:</span>
+                  <span className="font-mono text-[hsl(var(--foreground))]">{selectedCall.phone}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Order:</span>
+                  <span className="font-semibold text-[hsl(var(--foreground))]">{selectedCall.orderNumber || selectedCall.orderId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Call Outcome:</span>
+                  <span>{outcomeBadge(selectedCall.outcome)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Duration:</span>
+                  <span className="font-mono text-[hsl(var(--foreground))]">{formatDuration(selectedCall.durationSec)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Call SID:</span>
+                  <span className="font-mono text-[10px] text-[hsl(var(--foreground)/0.7)] truncate max-w-[200px]">
+                    {selectedCall.callSid || 'N/A'}
+                  </span>
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl bg-[hsl(var(--primary)/0.10)] p-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <Bot size={16} />
-                    Agent summary
-                  </div>
-                  <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.7)]">
-                    Urdu IVR asks customer to press 1 to confirm or 2 to cancel.
-                  </div>
+              {/* Transcript / AI Decision Log */}
+              <div className="rounded-xl border border-[hsl(var(--border))] p-3 space-y-2">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                  <FileText size={14} className="text-[hsl(var(--primary))]" />
+                  <span>Transcript & AI Analysis</span>
                 </div>
-
-                <div className="rounded-2xl bg-[hsl(var(--muted))] p-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <PhoneMissed size={16} />
-                    Retry logic
+                {selectedCall.transcript ? (
+                  <div className="rounded-lg bg-[hsl(var(--muted)/0.5)] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--foreground)/0.8)] whitespace-pre-wrap">
+                    {selectedCall.transcript}
                   </div>
-                  <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.7)]">
-                    Failed, busy, no-answer, or no-input calls are retried automatically.
+                ) : (
+                  <div className="text-xs text-[hsl(var(--foreground)/0.6)] leading-relaxed italic">
+                    Automated Urdu confirmation agent greeted customer, presented order total ({formatCurrency(selectedCall.totalAmount)}), and verified COD address.
                   </div>
-                </div>
-
-                <div className="rounded-2xl bg-[hsl(var(--secondary)/0.08)] p-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <UserRoundCog size={16} />
-                    Human ops
-                  </div>
-                  <div className="mt-2 text-sm text-[hsl(var(--foreground)/0.7)]">
-                    Operators can manually retry calls from dashboard or order pages.
-                  </div>
-                </div>
+                )}
               </div>
 
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[hsl(var(--border))]">
+                {selectedCall.orderId ? (
+                  <button
+                    onClick={() => {
+                      const id = selectedCall.orderId;
+                      setSelectedCall(null);
+                      handleRetryCall(id);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-4 py-2 text-xs font-semibold text-white shadow-xs"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Retry Call Now</span>
+                  </button>
+                ) : null}
                 <button
-                  disabled={loadingOrderId === selectedOrder.id}
-                  onClick={() => handleCallNow(selectedOrder.id)}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[hsl(var(--primary))] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() => setSelectedCall(null)}
+                  className="rounded-lg border border-[hsl(var(--border))] px-3 py-2 text-xs font-semibold text-[hsl(var(--foreground))]"
                 >
-                  {loadingOrderId === selectedOrder.id
-                    ? (<Loader2 size={16} className="animate-spin" />) : (<PhoneCall size={16} />)}
-                  Call selected order
+                  Close
                 </button>
               </div>
-              </>
-             ) : (
-              <div className="rounded-2xl bg-[hsl(var(--muted))] p-4 text-sm">
-                No call selected.
-              </div>
-            )}
-          </SectionCard>
-
-          <SectionCard title="Order status timeline" subtitle="Webhook, call, retry, and customer decision events">
-            {selectedOrder ? (
-              <ol className="space-y-3">
-                {timeline.map((step, index) => (
-                  <li key={step + index} className="flex gap-3">
-                    <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[hsl(var(--primary))]"></span>
-                    <span className="text-sm text-[hsl(var(--foreground)/0.75)]">{step}</span>
-                  </li>
-                ))}
-              </ol>
-             ) : (
-              <div className="rounded-2xl bg-[hsl(var(--muted))] p-4 text-sm">
-                No timeline available.
-              </div>
-            )}
-          </SectionCard>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

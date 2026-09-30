@@ -31,6 +31,16 @@ export function App() {
   const { state, dispatch } = useStore();
 
   React.useEffect(() => {
+    // If the browser loaded on Vite with /auth/shopify path instead of backend port 8787:
+    if (window.location.pathname.startsWith('/auth/shopify')) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const shopParam = urlParams.get('shop');
+      if (shopParam) {
+        window.location.href = apiClient.getShopifyAuthUrl(shopParam);
+        return;
+      }
+    }
+
     // 1. Detect ?token= in window.location.search (from Shopify OAuth callback)
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');

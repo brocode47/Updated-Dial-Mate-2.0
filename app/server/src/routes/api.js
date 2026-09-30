@@ -23,22 +23,33 @@ export function apiRouter() {
   router.get('/dashboard/stats', async (req, res) => {
     try {
       const shopRecord = req.shopRecord;
-      const [orders, customersCount, productsCount] = await Promise.all([
+      const [orders, customersCount, productsCount, calls, lastSyncLog] = await Promise.all([
         prisma.order.findMany({
           where: { shopId: shopRecord.id },
-          select: { status: true, totalAmount: true, callStatus: true }
+          select: { status: true, totalAmount: true, callStatus: true, createdAt: true }
         }),
         prisma.customer.count({ where: { shopId: shopRecord.id } }),
-        prisma.product.count({ where: { shopId: shopRecord.id } })
+        prisma.product.count({ where: { shopId: shopRecord.id } }),
+        prisma.call.findMany({
+          where: { shopId: shopRecord.id },
+          select: { outcome: true, durationSec: true }
+        }),
+        prisma.complianceLog.findFirst({
+          where: {
+            shopDomain: shopRecord.domain,
+            event: { contains: 'sync', mode: 'insensitive' }
+          },
+          orderBy: { createdAt: 'desc' }
+        })
       ]);
 
       const confirmed = orders.filter(o => o.status === 'Confirmed');
       const cancelled = orders.filter(o => o.status === 'Cancelled');
       const pending = orders.filter(o => o.status !== 'Confirmed' && o.status !== 'Cancelled');
-      const completedCalls = orders.filter(o => o.callStatus === 'completed');
+      const completedCalls = calls.filter(c => c.outcome === 'completed');
 
       const totalRevenue = confirmed.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-      const connectionRate = orders.length ? Math.round((completedCalls.length / orders.length) * 100) : 0;
+      const connectionRate = calls.length ? Math.round((completedCalls.length / calls.length) * 100) : (orders.length ? Math.round((orders.filter(o => o.callStatus === 'completed').length / orders.length) * 100) : 0);
 
       return res.json({
         totalOrders: orders.length,
@@ -48,7 +59,11 @@ export function apiRouter() {
         totalRevenue,
         connectionRate,
         customersCount,
-        productsCount
+        productsCount,
+        totalCalls: calls.length || orders.filter(o => o.callStatus && o.callStatus !== 'pending').length,
+        completedCalls: completedCalls.length,
+        shopDomain: shopRecord.domain,
+        lastSyncAt: lastSyncLog?.createdAt || shopRecord.updatedAt || shopRecord.installedAt
       });
     } catch (err) {
       return res.status(500).json({ error: String(err.message || err) });
@@ -71,79 +86,309 @@ export function apiRouter() {
   router.get('/products', async (req, res) => {
     try {
       const shopRecord = req.shopRecord;
-      const products = await prisma.product.findMany({
-        where: { shopId: shopRecord.id },
-        orderBy: { updatedAt: 'desc' },
-        take: 200
-      });
-      return res.json({ products });
+      const { search, page = 1, limit = 50 } = req.query;
+      const pageNum = parseInt(page, 10) || 1;
+      const limitNum = Math.min(parseInt(limit, 10) || 50, 100);
+      const skip = (pageNum - 1) * limitNum;
+
+      const where = { shopId: shopRecord.id };
+      if (search) {
+        where.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { category: { contains: search, mode: 'insensitive' } }
+        ];
+      }
+
+      const [products, total] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          orderBy: { updatedAt: 'desc' },
+          skip,
+          take: limitNum
+        }),
+        prisma.product.count({ where })
+      ]);
+
+      return res.json({ products, total, page: pageNum, totalPages: Math.ceil(total / limitNum) });
     } catch (err) {
       return res.status(500).json({ error: String(err.message || err) });
     }
   });
 
+  // Orders listing with search, filtering, and pagination
   router.get('/orders', async (req, res) => {
-    const shopRecord = req.shopRecord;
+    try {
+      const shopRecord = req.shopRecord;
+      const { search, status, startDate, endDate, page = 1, limit = 50 } = req.query;
+      const pageNum = parseInt(page, 10) || 1;
+      const limitNum = Math.min(parseInt(limit, 10) || 50, 100);
+      const skip = (pageNum - 1) * limitNum;
 
-    const rows = await prisma.order.findMany({
-      where: { shopId: shopRecord.id },
-      orderBy: { updatedAt: 'desc' },
-      take: 200
-    });
+      const where = { shopId: shopRecord.id };
 
-    const orders = rows.map((r) => {
-      let payload = {};
-      try {
-        payload = r.payload ? (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) : {};
-      } catch (e) {
-        payload = {};
+      if (status && status !== 'all') {
+        if (status === 'confirmed') where.status = 'Confirmed';
+        else if (status === 'cancelled') where.status = 'Cancelled';
+        else if (status === 'pending') {
+          where.status = { notIn: ['Confirmed', 'Cancelled'] };
+        } else if (status === 'failed') {
+          where.callStatus = { in: ['failed', 'busy', 'no-answer'] };
+        }
       }
 
-      const totalVal = r.totalAmount != null ? r.totalAmount : Number(payload?.current_total_price || payload?.total_price || 0);
+      if (startDate || endDate) {
+        where.createdAt = {};
+        if (startDate) where.createdAt.gte = new Date(startDate);
+        if (endDate) {
+          const end = new Date(endDate);
+          end.setHours(23, 59, 59, 999);
+          where.createdAt.lte = end;
+        }
+      }
 
-      return {
-        id: r.id,
-        orderNumber: r.orderNumber || payload?.name || r.id,
-        status: r.status,
-        tag: r.tag,
-        risk: r.riskScore,
-        callStatus: r.callStatus || 'pending',
-        callSid: r.callSid,
-        retryCount: r.retryCount || 0,
-        whatsappSent: r.whatsappSent || 0,
+      if (search && search.trim()) {
+        const q = search.trim();
+        where.OR = [
+          { id: { contains: q, mode: 'insensitive' } },
+          { orderNumber: { contains: q, mode: 'insensitive' } },
+          { tag: { contains: q, mode: 'insensitive' } },
+          { callSid: { contains: q, mode: 'insensitive' } },
+          { payload: { contains: q, mode: 'insensitive' } }
+        ];
+      }
 
-        shop: shopRecord.name || shopRecord.domain,
-        customer: payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer',
-        customerName: payload?.shipping_address?.name || (payload?.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : '') || 'Customer',
-        productName: (payload?.line_items || [])[0]?.title || 'Order Items',
-        city: payload?.shipping_address?.city || '',
-        phone: payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || '',
-        payment: (payload?.payment_gateway_names || []).join(', ') || 'Unknown',
-        total: totalVal,
-        totalAmount: totalVal,
-        items: (payload?.line_items || []).slice(0, 3).map((li) => ({
-          title: li.title,
-          variant: li.variant_title,
-          qty: li.quantity
-        })),
-        createdAt: r.createdAt,
-        updatedAt: r.updatedAt
-      };
-    });
+      const [rows, total, confirmedCount, pendingCount, cancelledCount] = await Promise.all([
+        prisma.order.findMany({
+          where,
+          include: {
+            customer: true,
+            calls: {
+              orderBy: { createdAt: 'desc' },
+              take: 5
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limitNum
+        }),
+        prisma.order.count({ where }),
+        prisma.order.count({ where: { shopId: shopRecord.id, status: 'Confirmed' } }),
+        prisma.order.count({ where: { shopId: shopRecord.id, status: { notIn: ['Confirmed', 'Cancelled'] } } }),
+        prisma.order.count({ where: { shopId: shopRecord.id, status: 'Cancelled' } })
+      ]);
 
-    return res.json({ orders });
+      const orders = rows.map((r) => {
+        let payload = {};
+        try {
+          payload = r.payload ? (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) : {};
+        } catch (_) {
+          payload = {};
+        }
+
+        const totalVal = r.totalAmount != null ? r.totalAmount : Number(payload?.current_total_price || payload?.total_price || 0);
+
+        let rawPhone = r.customer?.phone || payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || '';
+        let formattedPhone = rawPhone;
+        if (rawPhone && !rawPhone.startsWith('+')) {
+          formattedPhone = '+92' + rawPhone.replace(/^0/, '');
+        }
+
+        const customerName = r.customer
+          ? `${r.customer.firstName || ''} ${r.customer.lastName || ''}`.trim() || r.customer.phone
+          : payload?.shipping_address?.name || (payload?.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : '') || 'Customer';
+
+        const lineItems = payload?.line_items || [];
+        const productName = lineItems[0]?.title ? (lineItems.length > 1 ? `${lineItems[0].title} (+${lineItems.length - 1} more)` : lineItems[0].title) : 'Order Items';
+
+        const shippingAddress = payload?.shipping_address ? {
+          address1: payload.shipping_address.address1 || '',
+          address2: payload.shipping_address.address2 || '',
+          city: payload.shipping_address.city || '',
+          province: payload.shipping_address.province || '',
+          country: payload.shipping_address.country || 'Pakistan',
+          zip: payload.shipping_address.zip || ''
+        } : null;
+
+        return {
+          id: r.id,
+          orderNumber: r.orderNumber || payload?.name || r.id,
+          status: r.status,
+          tag: r.tag,
+          risk: r.riskScore,
+          callStatus: r.callStatus || 'pending',
+          callSid: r.callSid,
+          retryCount: r.retryCount || 0,
+          shop: shopRecord.name || shopRecord.domain,
+          customer: customerName,
+          customerName,
+          productName,
+          city: payload?.shipping_address?.city || '',
+          phone: formattedPhone,
+          payment: (payload?.payment_gateway_names || []).join(', ') || 'Cash on Delivery (COD)',
+          total: totalVal,
+          totalAmount: totalVal,
+          shippingAddress,
+          items: lineItems.map((li) => ({
+            id: li.id,
+            title: li.title,
+            variant: li.variant_title,
+            qty: li.quantity,
+            price: parseFloat(li.price || 0)
+          })),
+          recentCalls: r.calls || [],
+          courierName: r.courierName,
+          trackingNumber: r.trackingNumber,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt
+        };
+      });
+
+      return res.json({
+        orders,
+        total,
+        page: pageNum,
+        totalPages: Math.ceil(total / limitNum),
+        counts: {
+          total: confirmedCount + pendingCount + cancelledCount,
+          confirmed: confirmedCount,
+          pending: pendingCount,
+          cancelled: cancelledCount
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ error: String(err.message || err) });
+    }
   });
 
+  // Calls listing with search, filtering, and full order context
   router.get('/calls', async (req, res) => {
-    const shopRecord = req.shopRecord;
+    try {
+      const shopRecord = req.shopRecord;
+      const { search, status, page = 1, limit = 50 } = req.query;
+      const pageNum = parseInt(page, 10) || 1;
+      const limitNum = Math.min(parseInt(limit, 10) || 50, 100);
+      const skip = (pageNum - 1) * limitNum;
 
-    const rows = await prisma.call.findMany({
-      where: { shopId: shopRecord.id },
-      orderBy: { createdAt: 'desc' },
-      take: 200
-    });
+      // Sync check: ensure orders with call activity have a corresponding Call record
+      try {
+        const unlinkedOrders = await prisma.order.findMany({
+          where: {
+            shopId: shopRecord.id,
+            callSid: { not: null },
+            calls: { none: {} }
+          },
+          take: 25
+        });
 
-    return res.json({ calls: rows });
+        for (const uo of unlinkedOrders) {
+          await prisma.call.create({
+            data: {
+              shopId: shopRecord.id,
+              orderId: uo.id,
+              outcome: uo.callStatus || 'completed',
+              intent: 'Order Confirmation',
+              sentiment: uo.status === 'Confirmed' ? 'Positive' : uo.status === 'Cancelled' ? 'Negative' : 'Neutral',
+              providerCallSid: uo.callSid,
+              durationSec: uo.callStatus === 'completed' ? 45 : 0,
+              createdAt: uo.lastCallAt || uo.updatedAt || uo.createdAt
+            }
+          }).catch(() => {});
+        }
+      } catch (_) {}
+
+      const where = { shopId: shopRecord.id };
+      if (status && status !== 'all') {
+        where.outcome = { equals: status, mode: 'insensitive' };
+      }
+
+      if (search && search.trim()) {
+        const q = search.trim();
+        where.OR = [
+          { orderId: { contains: q, mode: 'insensitive' } },
+          { providerCallSid: { contains: q, mode: 'insensitive' } },
+          { intent: { contains: q, mode: 'insensitive' } },
+          { outcome: { contains: q, mode: 'insensitive' } }
+        ];
+      }
+
+      const [rows, total, completedCount, failedCount] = await Promise.all([
+        prisma.call.findMany({
+          where,
+          include: {
+            order: {
+              include: {
+                customer: true
+              }
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limitNum
+        }),
+        prisma.call.count({ where }),
+        prisma.call.count({ where: { shopId: shopRecord.id, outcome: 'completed' } }),
+        prisma.call.count({ where: { shopId: shopRecord.id, outcome: { in: ['failed', 'busy', 'no-answer'] } } })
+      ]);
+
+      const calls = rows.map((c) => {
+        let payload = {};
+        if (c.order?.payload) {
+          try {
+            payload = typeof c.order.payload === 'string' ? JSON.parse(c.order.payload) : c.order.payload;
+          } catch (_) {}
+        }
+
+        const customerName = c.order?.customer
+          ? `${c.order.customer.firstName || ''} ${c.order.customer.lastName || ''}`.trim() || c.order.customer.phone
+          : payload?.shipping_address?.name || payload?.customer?.first_name || 'Customer';
+
+        let rawPhone = c.order?.customer?.phone || payload?.phone || payload?.shipping_address?.phone || payload?.customer?.phone || '';
+        let formattedPhone = rawPhone;
+        if (rawPhone && !rawPhone.startsWith('+')) {
+          formattedPhone = '+92' + rawPhone.replace(/^0/, '');
+        }
+
+        const lineItems = payload?.line_items || [];
+        const productName = lineItems[0]?.title || 'Store Items';
+
+        return {
+          id: c.id,
+          orderId: c.orderId,
+          orderNumber: c.order?.orderNumber || payload?.name || c.orderId,
+          customerName,
+          phone: formattedPhone,
+          productName,
+          status: c.outcome || 'completed',
+          outcome: c.outcome || 'completed',
+          durationSec: c.durationSec || (c.outcome === 'completed' ? 45 : 0),
+          intent: c.intent || 'Order Confirmation',
+          sentiment: c.sentiment || 'Neutral',
+          recordingUrl: c.recordingUrl || null,
+          transcript: c.transcript || null,
+          callSid: c.providerCallSid || c.order?.callSid || '',
+          orderStatus: c.order?.status || 'Pending Confirmation',
+          totalAmount: c.order?.totalAmount || Number(payload?.total_price || 0),
+          retryCount: c.order?.retryCount || 0,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt
+        };
+      });
+
+      return res.json({
+        calls,
+        total,
+        page: pageNum,
+        totalPages: Math.ceil(total / limitNum),
+        stats: {
+          totalCalls: total,
+          completedCalls: completedCount,
+          failedCalls: failedCount,
+          activeCalls: Math.max(0, total - completedCount - failedCount)
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ error: String(err.message || err) });
+    }
   });
 
   router.get('/compliance', async (req, res) => {

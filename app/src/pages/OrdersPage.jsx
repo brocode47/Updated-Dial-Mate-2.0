@@ -8,367 +8,546 @@ import {
   Search,
   BadgeCheck,
   ShieldAlert,
-  TimerReset
+  TimerReset,
+  Eye,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  X,
+  Package,
+  MapPin,
+  Phone,
+  Calendar,
+  AlertCircle
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
 import { PageHeader } from '../components/PageHeader.jsx';
 import { SectionCard } from '../components/SectionCard.jsx';
+import { formatCurrency } from '../utils.jsx';
 import { apiClient } from '../api/client.js';
 
 export function OrdersPage() {
   const { pushToast } = useToast();
 
   const [orders, setOrders] = React.useState([]);
+  const [counts, setCounts] = React.useState({ total: 0, confirmed: 0, pending: 0, cancelled: 0 });
   const [loading, setLoading] = React.useState(true);
   const [syncing, setSyncing] = React.useState(false);
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
-  const [loadingOrderId, setLoadingOrderId] = React.useState(null);
+  const [startDate, setStartDate] = React.useState('');
+  const [endDate, setEndDate] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [totalOrders, setTotalOrders] = React.useState(0);
+  const [selectedOrder, setSelectedOrder] = React.useState(null);
+  const [actionLoadingId, setActionLoadingId] = React.useState(null);
 
-  async function loadOrders(showToast = false) {
+  const loadOrders = async (showToast = false) => {
     try {
       setSyncing(true);
 
-      const data = await apiClient.get('/orders');
-      setOrders(data.orders || []);
+      const params = new URLSearchParams();
+      if (search.trim()) params.append('search', search.trim());
+      if (filter !== 'all') params.append('status', filter);
+      if (startDate) params.append('startDate', startDate);
+      if (endDate) params.append('endDate', endDate);
+      params.append('page', String(page));
+      params.append('limit', '25');
 
-      if (showToast) pushToast('Orders synced successfully.', 'success');
+      const data = await apiClient.get(`/orders?${params.toString()}`);
+      setOrders(data.orders || []);
+      setTotalOrders(data.total || 0);
+      setTotalPages(data.totalPages || 1);
+      if (data.counts) {
+        setCounts(data.counts);
+      }
+
+      if (showToast) pushToast('Orders updated from backend database.', 'success');
     } catch (err) {
       console.error(err);
-      pushToast('Failed to load orders from backend.', 'default');
+      pushToast(err.message || 'Failed to load orders from backend.', 'error');
     } finally {
       setLoading(false);
       setSyncing(false);
     }
-  }
+  };
 
   React.useEffect(() => {
     loadOrders();
+  }, [page, filter, startDate, endDate]);
 
-    const timer = setInterval(() => loadOrders(false), 60000);
-    return () => clearInterval(timer);
-  }, []);
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    setPage(1);
+    loadOrders();
+  };
 
-  const confirmedOrders = orders.filter((o) => o.status === 'Confirmed');
-  const cancelledOrders = orders.filter((o) => o.status === 'Cancelled');
-  const pendingOrders = orders.filter(
-    (o) => o.status !== 'Confirmed' && o.status !== 'Cancelled'
-  );
-
-  const failedOrders = orders.filter(
-    (o) =>
-      o.callStatus === 'failed' ||
-      o.callStatus === 'busy' ||
-      o.callStatus === 'no-answer'
-  );
-
-  const filteredOrders = orders.filter((order) => {
-    const q = search.trim().toLowerCase();
-
-    const matchesSearch =
-      !q ||
-      String(order.id || '').toLowerCase().includes(q) ||
-      String(order.shop || '').toLowerCase().includes(q) ||
-      String(order.status || '').toLowerCase().includes(q) ||
-      String(order.callStatus || '').toLowerCase().includes(q) ||
-      String(order.callSid || '').toLowerCase().includes(q);
-
-    if (!matchesSearch) return false;
-
-    if (filter === 'confirmed') return order.status === 'Confirmed';
-    if (filter === 'cancelled') return order.status === 'Cancelled';
-    if (filter === 'pending') return order.status !== 'Confirmed' && order.status !== 'Cancelled';
-    if (filter === 'failed') {
-      return (
-        order.callStatus === 'failed' ||
-        order.callStatus === 'busy' ||
-        order.callStatus === 'no-answer'
-      );
+  const handleCallOrder = async (orderId) => {
+    setActionLoadingId(`call-${orderId}`);
+    try {
+      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/call`, {});
+      if (data.ok) {
+        pushToast(`Call queued for order ${orderId}`, 'success');
+        await loadOrders(false);
+      } else {
+        throw new Error(data.error || 'Call failed');
+      }
+    } catch (err) {
+      pushToast(err.message || 'Call failed.', 'error');
+    } finally {
+      setActionLoadingId(null);
     }
+  };
 
-    return true;
-  });
+  const handleUpdateOrderStatus = async (orderId, newStatus, tag) => {
+    setActionLoadingId(`status-${orderId}`);
+    try {
+      const res = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/tag`, {
+        status: newStatus,
+        tag: tag || `Merchant Action: ${newStatus}`
+      });
+      if (res && res.ok) {
+        pushToast(`Order marked as ${newStatus}`, 'success');
+        // Update local state immediately
+        setOrders((prev) =>
+          prev.map((o) => (o.id === orderId ? { ...o, status: newStatus, tag } : o))
+        );
+        if (selectedOrder && selectedOrder.id === orderId) {
+          setSelectedOrder((prev) => ({ ...prev, status: newStatus, tag }));
+        }
+      }
+    } catch (err) {
+      pushToast(err.message || 'Failed to update order status.', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
 
   const statusClass = (status) => {
-    if (status === 'Confirmed') return 'bg-emerald-500/12 text-emerald-600';
-    if (status === 'Cancelled') return 'bg-red-500/12 text-red-600';
-    return 'bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))]';
+    if (status === 'Confirmed') return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
+    if (status === 'Cancelled') return 'bg-red-500/10 text-red-600 dark:text-red-400';
+    return 'bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))]';
   };
 
   const callClass = (status) => {
-    if (status === 'completed') return 'bg-emerald-500/12 text-emerald-600';
+    if (status === 'completed') return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
     if (status === 'failed' || status === 'busy' || status === 'no-answer') {
-      return 'bg-red-500/12 text-red-600';
+      return 'bg-red-500/10 text-red-600 dark:text-red-400';
     }
-    if (status === 'ringing' || status === 'in-progress') {
-      return 'bg-blue-500/12 text-blue-600';
+    if (status === 'ringing' || status === 'in-progress' || status === 'queued') {
+      return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 animate-pulse';
     }
-    return 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.7)]';
-  };
-
-  const handleCallNow = async (orderId) => {
-    setLoadingOrderId(orderId);
-
-    try {
-      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/call`, {});
-
-      if (!data.ok) {
-        throw new Error(data.error || 'Call failed');
-      }
-
-      pushToast('Call started for order ' + orderId, 'success');
-      await loadOrders(false);
-    } catch (err) {
-      console.error(err);
-      pushToast(err.message || 'Call failed.', 'default');
-    } finally {
-      setLoadingOrderId(null);
-    }
+    return 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.6)]';
   };
 
   return (
-    <div className="fade-up space-y-5 sm:space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <PageHeader
-          eyebrow="Order management"
-          title="Real-time Shopify confirmation workflow"
-          description="View live Shopify orders, confirmation status, call status, retries, and manually trigger calls."
-        />
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[hsl(var(--foreground))] md:text-3xl">
+            Shopify COD Orders
+          </h1>
+          <p className="mt-1 text-xs sm:text-sm text-[hsl(var(--foreground)/0.65)]">
+            Review incoming cash-on-delivery orders, confirmation statuses, customer details, and call outcomes.
+          </p>
+        </div>
 
         <button
           onClick={() => loadOrders(true)}
           disabled={syncing}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm font-semibold shadow-soft disabled:opacity-50 sm:w-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-2 text-xs font-semibold shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
         >
-          {syncing ? (<Loader2 size={16} className="animate-spin" />) : (<RefreshCw size={16} />)}
-          Sync Now
+          {syncing ? <Loader2 size={14} className="animate-spin text-[hsl(var(--primary))]" /> : <RefreshCw size={14} />}
+          <span>Refresh Orders</span>
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
+      {/* KPI Summary Cards */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Total Orders</p>
-              <h3 className="mt-2 text-3xl font-bold">{orders.length}</h3>
-            </div>
-            <ListFilter className="text-[hsl(var(--primary))]" />
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Total Orders</span>
+            <ListFilter size={16} className="text-[hsl(var(--primary))]" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-[hsl(var(--foreground))]">{counts.total || totalOrders}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Confirmed</p>
-              <h3 className="mt-2 text-3xl font-bold">{confirmedOrders.length}</h3>
-            </div>
-            <BadgeCheck className="text-emerald-600" />
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Confirmed</span>
+            <BadgeCheck size={16} className="text-emerald-600" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{counts.confirmed}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Pending</p>
-              <h3 className="mt-2 text-3xl font-bold">{pendingOrders.length}</h3>
-            </div>
-            <TimerReset className="text-[hsl(var(--primary))]" />
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Pending Confirmation</span>
+            <TimerReset size={16} className="text-[hsl(var(--primary))]" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-[hsl(var(--primary))]">{counts.pending}</div>
         </div>
 
-        <div className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-soft">
+        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-[hsl(var(--foreground)/0.58)]">Cancelled</p>
-              <h3 className="mt-2 text-3xl font-bold">{cancelledOrders.length}</h3>
-            </div>
-            <ShieldAlert className="text-red-600" />
+            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Cancelled</span>
+            <ShieldAlert size={16} className="text-red-600" />
           </div>
+          <div className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">{counts.cancelled}</div>
         </div>
       </div>
 
-      <SectionCard title="Order table" subtitle="Live order data from your backend database">
-        <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-          <div className="relative">
-            <Search size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.45)]" />
+      {/* Main Table Card */}
+      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
+        {/* Search & Filter Toolbar */}
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between pb-4 border-b border-[hsl(var(--border))]">
+          <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.4)]" />
             <input
+              type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search order, store, status, call SID..."
-              className="w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-3 pl-11 pr-4 text-sm outline-none focus:border-[hsl(var(--primary))]"
+              placeholder="Search by order ID, customer name, or phone..."
+              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] py-2 pl-9 pr-3 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
             />
-          </div>
+          </form>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:justify-end">
-            {[
-              ['all', 'All', orders.length],
-              ['pending', 'Pending', pendingOrders.length],
-              ['confirmed', 'Confirmed', confirmedOrders.length],
-              ['cancelled', 'Cancelled', cancelledOrders.length],
-              ['failed', 'Failed', failedOrders.length]
-            ].map(([key, label, count]) => (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold ${
-                  filter === key
-                    ? 'bg-[hsl(var(--primary))] text-white shadow-soft'
-                    : 'border border-[hsl(var(--border))] bg-[hsl(var(--card))]'
-                }`}
-              >
-                {label} · {count}
-              </button>
-            ))}
-          </div>
-        </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Date Filters */}
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))]"
+              title="From Date"
+            />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))]"
+              title="To Date"
+            />
 
-        {loading ? (
-          <div className="flex items-center justify-center py-14">
-            <Loader2 className="mr-2 animate-spin" size={18} />
-            Loading orders...
-          </div>
-         ) : filteredOrders.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-[hsl(var(--border))] py-14 text-center">
-            <div className="font-semibold">No orders found</div>
-            <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.55)]">
-              Try changing filters or syncing again.
+            {/* Filter Pills */}
+            <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0">
+              {[
+                ['all', 'All'],
+                ['pending', 'Pending'],
+                ['confirmed', 'Confirmed'],
+                ['cancelled', 'Cancelled'],
+                ['failed', 'Failed Call']
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => { setFilter(key); setPage(1); }}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                    filter === key
+                      ? 'bg-[hsl(var(--primary))] text-white'
+                      : 'border border-[hsl(var(--border))] text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted))]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
-         ) : (
-          <>
-          <div className="hidden overflow-hidden rounded-3xl border border-[hsl(var(--border))] lg:block">
-            <table className="w-full border-collapse text-sm">
-             
-
-<thead className="bg-[hsl(var(--muted)/0.55)] text-left text-xs uppercase tracking-[0.12em] text-[hsl(var(--foreground)/0.55)]">
-  <tr>
-    <th className="px-5 py-4">Sr. No.</th>
-    <th className="px-5 py-4">Order</th>
-    <th className="px-5 py-4">Store</th>
-    <th className="px-5 py-4">Status</th>
-    <th className="px-5 py-4">Call</th>
-    <th className="px-5 py-4">Retry</th>
-    <th className="px-5 py-4 text-right">Actions</th>
-  </tr>
-</thead>
-
-<tbody>
-  {filteredOrders.map((order, index) => (
-    <tr key={order.id} className="border-t border-[hsl(var(--border))] bg-[hsl(var(--card))]">
-
-      {/* SR NO */}
-      <td className="px-5 py-4 font-semibold">
-        {index + 1}
-      </td>
-
-      <td className="px-5 py-4 font-semibold">
-        {order.id}
-        <div className="mt-1 max-w-[260px] truncate text-xs font-normal text-[hsl(var(--foreground)/0.52)]">
-          {order.callSid || 'No call SID yet'}
         </div>
-      </td>
 
-      <td className="px-5 py-4">{order.shop || 'Unknown'}</td>
+        {/* Orders Table */}
+        {loading ? (
+          <div className="py-20 text-center">
+            <Loader2 size={24} className="mx-auto animate-spin text-[hsl(var(--primary))]" />
+            <div className="mt-2 text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Loading orders from database...</div>
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="py-16 text-center">
+            <Package size={36} className="mx-auto text-[hsl(var(--foreground)/0.3)]" />
+            <div className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">No orders found</div>
+            <div className="mt-1 text-xs text-[hsl(var(--foreground)/0.6)]">
+              No orders match the selected filters or search parameters.
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] text-[11px] font-bold uppercase tracking-wider text-[hsl(var(--foreground)/0.6)]">
+                <tr>
+                  <th className="py-3 px-3">Order</th>
+                  <th className="py-3 px-3">Customer</th>
+                  <th className="py-3 px-3">Items</th>
+                  <th className="py-3 px-3">Phone</th>
+                  <th className="py-3 px-3">Total (PKR)</th>
+                  <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3">Call Outcome</th>
+                  <th className="py-3 px-3">Retries</th>
+                  <th className="py-3 px-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[hsl(var(--border))]">
+                {orders.map((o) => (
+                  <tr key={o.id} className="hover:bg-[hsl(var(--muted)/0.35)] transition-colors">
+                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
+                      <div className="flex items-center gap-1.5">
+                        <span>{o.orderNumber || o.id}</span>
+                        {o.tag ? (
+                          <span className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-[9px] font-medium text-[hsl(var(--foreground)/0.6)]">
+                            {o.tag}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="text-[10px] text-[hsl(var(--foreground)/0.5)] font-normal">
+                        {o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}
+                      </div>
+                    </td>
 
-      <td className="px-5 py-4">
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(order.status)}`}>
-          {order.status || 'Pending'}
-        </span>
-      </td>
+                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground))]">
+                      {o.customerName || 'Customer'}
+                      {o.city ? <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">{o.city}</div> : null}
+                    </td>
 
-      <td className="px-5 py-4">
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold $${callClass(order.callStatus)}`}>
-          {order.callStatus || 'pending'}
-        </span>
-      </td>
+                    <td className="py-3 px-3 text-[hsl(var(--foreground)/0.8)] max-w-[180px] truncate" title={o.productName}>
+                      {o.productName || 'Order Items'}
+                    </td>
 
-      <td className="px-5 py-4">{order.retryCount || 0}</td>
+                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground))]">
+                      {o.phone || 'No phone'}
+                    </td>
 
-      <td className="px-5 py-4">
-        <div className="flex justify-end gap-2">
-          <button
-            disabled={loadingOrderId === order.id}
-            onClick={() => handleCallNow(order.id)}
-            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-          >
-            {loadingOrderId === order.id
-              ? (<Loader2 size={14} className="animate-spin" />) : (<PhoneCall size={14} />)}
-            Call
-          </button>
+                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
+                      {formatCurrency(o.totalAmount || o.total)}
+                    </td>
 
-          <button
-            disabled={loadingOrderId === order.id}
-            onClick={() => handleCallNow(order.id)}
-            className="inline-flex items-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs font-semibold disabled:opacity-50"
-          >
-            <RotateCcw size={14} />
-            Retry
-          </button>
-        </div>
-      </td>
+                    <td className="py-3 px-3">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusClass(o.status)}`}>
+                        {o.status || 'Pending'}
+                      </span>
+                    </td>
 
-    </tr>
-  ))}
-</tbody>
+                    <td className="py-3 px-3">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${callClass(o.callStatus)}`}>
+                        {o.callStatus || 'pending'}
+                      </span>
+                    </td>
+
+                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground)/0.7)]">
+                      {o.retryCount || 0}
+                    </td>
+
+                    <td className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setSelectedOrder(o)}
+                          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1.5 text-[hsl(var(--foreground)/0.7)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] shadow-xs transition"
+                          title="View order details"
+                        >
+                          <Eye size={13} />
+                        </button>
+
+                        <button
+                          onClick={() => handleCallOrder(o.id)}
+                          disabled={actionLoadingId === `call-${o.id}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-[11px] font-semibold text-[hsl(var(--foreground))] shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
+                          title="Trigger Urdu voice call"
+                        >
+                          {actionLoadingId === `call-${o.id}` ? (
+                            <Loader2 size={12} className="animate-spin text-[hsl(var(--primary))]" />
+                          ) : (
+                            <PhoneCall size={12} className="text-[hsl(var(--primary))]" />
+                          )}
+                          <span>Call</span>
+                        </button>
+
+                        {o.status !== 'Confirmed' ? (
+                          <button
+                            onClick={() => handleUpdateOrderStatus(o.id, 'Confirmed', 'Merchant Confirmed')}
+                            disabled={actionLoadingId === `status-${o.id}`}
+                            className="rounded-lg bg-emerald-500/10 p-1.5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 shadow-xs transition"
+                            title="Confirm Order"
+                          >
+                            <CheckCircle2 size={13} />
+                          </button>
+                        ) : null}
+
+                        {o.status !== 'Cancelled' ? (
+                          <button
+                            onClick={() => handleUpdateOrderStatus(o.id, 'Cancelled', 'Merchant Cancelled')}
+                            disabled={actionLoadingId === `status-${o.id}`}
+                            className="rounded-lg bg-red-500/10 p-1.5 text-red-600 dark:text-red-400 hover:bg-red-500/20 shadow-xs transition"
+                            title="Cancel Order"
+                          >
+                            <XCircle size={13} />
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
           </div>
+        )}
 
-          <div className="grid gap-4 lg:hidden">
-            {filteredOrders.map((order) => (
-              <div key={order.id} className="rounded-3xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-soft">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-lg font-semibold">{order.id}</div>
-                    <div className="mt-1 text-sm text-[hsl(var(--foreground)/0.62)]">{order.shop || 'Unknown store'}</div>
-                  </div>
+        {/* Pagination Bar */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between pt-4 border-t border-[hsl(var(--border))] mt-4 text-xs text-[hsl(var(--foreground)/0.6)]">
+            <div>
+              Showing page <span className="font-semibold text-[hsl(var(--foreground))]">{page}</span> of{' '}
+              <span className="font-semibold text-[hsl(var(--foreground))]">{totalPages}</span> ({totalOrders} total orders)
+            </div>
 
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(order.status)}`}>
-                    {order.status || 'Pending'}
-                  </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
+              >
+                <ChevronLeft size={15} />
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Order Details Drawer / Modal */}
+      {selectedOrder ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="relative w-full max-w-lg rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
+              <div className="flex items-center gap-2">
+                <span className="text-base font-bold text-[hsl(var(--foreground))]">
+                  Order {selectedOrder.orderNumber || selectedOrder.id}
+                </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusClass(selectedOrder.status)}`}>
+                  {selectedOrder.status}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedOrder(null)}
+                className="rounded-lg p-1 text-[hsl(var(--foreground)/0.5)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs">
+              {/* Customer Profile & Address */}
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-3 space-y-2">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                  <MapPin size={14} className="text-[hsl(var(--primary))]" />
+                  <span>Customer & Shipping Address</span>
                 </div>
-
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-[hsl(var(--muted)/0.45)] p-3">
-                    <div className="text-xs uppercase tracking-[0.1em] text-[hsl(var(--foreground)/0.45)]">Call</div>
-                    <div className="mt-1 text-sm font-semibold">{order.callStatus || 'pending'}</div>
-                  </div>
-
-                  <div className="rounded-2xl bg-[hsl(var(--muted)/0.45)] p-3">
-                    <div className="text-xs uppercase tracking-[0.1em] text-[hsl(var(--foreground)/0.45)]">Retry</div>
-                    <div className="mt-1 text-sm font-semibold">{order.retryCount || 0}</div>
-                  </div>
+                <div className="font-semibold text-[hsl(var(--foreground))]">{selectedOrder.customerName}</div>
+                <div className="text-[hsl(var(--foreground)/0.7)] flex items-center gap-1.5 font-mono">
+                  <Phone size={12} />
+                  <span>{selectedOrder.phone}</span>
                 </div>
+                {selectedOrder.shippingAddress ? (
+                  <div className="text-[hsl(var(--foreground)/0.7)] leading-relaxed">
+                    {selectedOrder.shippingAddress.address1} {selectedOrder.shippingAddress.address2}
+                    <br />
+                    {selectedOrder.shippingAddress.city}, {selectedOrder.shippingAddress.province}{' '}
+                    {selectedOrder.shippingAddress.zip}, {selectedOrder.shippingAddress.country}
+                  </div>
+                ) : (
+                  <div className="text-[hsl(var(--foreground)/0.5)]">No shipping address recorded.</div>
+                )}
+              </div>
 
-                <div className="mt-3 break-all rounded-2xl bg-[hsl(var(--muted)/0.35)] p-3 text-xs text-[hsl(var(--foreground)/0.58)]">
-                  {order.callSid || 'No call SID yet'}
+              {/* Items Summary */}
+              <div className="rounded-xl border border-[hsl(var(--border))] p-3 space-y-2">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                  <Package size={14} className="text-[hsl(var(--primary))]" />
+                  <span>Order Items ({selectedOrder.items?.length || 1})</span>
                 </div>
-
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <button
-                    disabled={loadingOrderId === order.id}
-                    onClick={() => handleCallNow(order.id)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[hsl(var(--primary))] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    <PhoneCall size={14} />
-                    Call
-                  </button>
-
-                  <button
-                    disabled={loadingOrderId === order.id}
-                    onClick={() => handleCallNow(order.id)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2.5 text-sm font-semibold disabled:opacity-50"
-                  >
-                    <RotateCcw size={14} />
-                    Retry
-                  </button>
+                {selectedOrder.items && selectedOrder.items.length > 0 ? (
+                  <div className="divide-y divide-[hsl(var(--border))]">
+                    {selectedOrder.items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between py-1.5 text-[hsl(var(--foreground)/0.8)]">
+                        <div>
+                          <div className="font-semibold">{item.title}</div>
+                          {item.variant ? <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">{item.variant}</div> : null}
+                          <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">Qty: {item.qty}</div>
+                        </div>
+                        <div className="font-mono font-semibold">{formatCurrency(item.price * item.qty)}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[hsl(var(--foreground)/0.8)] font-semibold">{selectedOrder.productName}</div>
+                )}
+                <div className="pt-2 border-t border-[hsl(var(--border))] flex justify-between font-bold text-sm text-[hsl(var(--foreground))]">
+                  <span>Total (COD)</span>
+                  <span className="font-mono">{formatCurrency(selectedOrder.totalAmount || selectedOrder.total)}</span>
                 </div>
               </div>
-            ))}
+
+              {/* Call History / Details */}
+              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-1.5">
+                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                  <PhoneCall size={14} className="text-[hsl(var(--primary))]" />
+                  <span>Call Details</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Call Status:</span>
+                  <span className="font-semibold text-[hsl(var(--foreground))] capitalize">{selectedOrder.callStatus || 'pending'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[hsl(var(--foreground)/0.6)]">Retry Attempts:</span>
+                  <span className="font-semibold text-[hsl(var(--foreground))]">{selectedOrder.retryCount || 0}</span>
+                </div>
+                {selectedOrder.callSid ? (
+                  <div className="flex justify-between">
+                    <span className="text-[hsl(var(--foreground)/0.6)]">Call SID:</span>
+                    <span className="font-mono text-[10px] text-[hsl(var(--foreground)/0.7)] truncate max-w-[200px]">
+                      {selectedOrder.callSid}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Drawer Actions */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[hsl(var(--border))]">
+                <button
+                  onClick={() => handleCallOrder(selectedOrder.id)}
+                  disabled={actionLoadingId === `call-${selectedOrder.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3.5 py-2 text-xs font-semibold text-white shadow-xs"
+                >
+                  <PhoneCall size={13} />
+                  <span>Trigger Call</span>
+                </button>
+
+                <button
+                  onClick={() => handleUpdateOrderStatus(selectedOrder.id, 'Confirmed', 'Manual Confirmation')}
+                  className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                >
+                  Confirm Order
+                </button>
+
+                <button
+                  onClick={() => handleUpdateOrderStatus(selectedOrder.id, 'Cancelled', 'Manual Cancellation')}
+                  className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/20"
+                >
+                  Cancel Order
+                </button>
+              </div>
+            </div>
           </div>
-          </>
-        )}
-      </SectionCard>
+        </div>
+      ) : null}
     </div>
   );
 }

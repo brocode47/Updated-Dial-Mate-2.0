@@ -18,7 +18,7 @@ export function createInitialState() {
       },
       shop: {
         name: 'Your Store',
-        domain: 'bro-code-7492.myshopify.com',
+        domain: '',
         plan: 'Starter',
         language: 'Urdu First'
       }
