@@ -113,6 +113,7 @@ services:
     environment:
       - DATABASE_URL=mysql://root:${WA_MYSQL_PASSWORD}@wa-mysql:3306/${WA_MYSQL_DB:-wa_akg}
       - HOSTNAME=0.0.0.0
+      - PORT=3000
     depends_on:
       - wa-mysql
     volumes:
