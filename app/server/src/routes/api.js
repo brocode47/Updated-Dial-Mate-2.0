@@ -557,6 +557,33 @@ export function apiRouter() {
       return res.status(500).json({ error: String(err.message || err) });
     }
   });
+
+  router.post('/orders/:orderId/whatsapp', async (req, res) => {
+    try {
+      const shopRecord = req.shopRecord;
+      const { orderId } = req.params;
+
+      const orderRow = await prisma.order.findUnique({
+        where: { id: orderId }
+      });
+
+      if (!orderRow || orderRow.shopId !== shopRecord.id) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      const { WhatsAppFallbackService } = await import('../services/whatsappFallbackService.js');
+      const result = await WhatsAppFallbackService.sendFallback({
+        orderId: orderRow.id,
+        shopId: shopRecord.id
+      });
+
+      return res.json({ ok: result.success, ...result });
+    } catch (err) {
+      console.error('WhatsApp send error:', err);
+      return res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+
   router.get('/ai/logs', async (req, res) => {
     try {
       const shopRecord = req.shopRecord;

@@ -4,18 +4,13 @@ import {
   RefreshCw,
   Loader2,
   PhoneCall,
-  RotateCcw,
   Search,
-  BadgeCheck,
-  ShieldAlert,
-  TimerReset,
-  Eye,
   CheckCircle2,
   XCircle,
   Clock,
   ChevronLeft,
   ChevronRight,
-  Download,
+  Eye,
   X,
   Package,
   MapPin,
@@ -24,15 +19,25 @@ import {
   AlertCircle,
   CreditCard,
   MessageSquare,
-  ArrowDown,
-  Bot
+  ShieldCheck,
+  ShieldAlert,
+  Send,
+  Sliders,
+  DollarSign,
+  User,
+  ShoppingBag,
+  ExternalLink,
+  PhoneForwarded,
+  RotateCcw
 } from 'lucide-react?deps=react';
 
 import { useToast } from '../toast.jsx';
-import { PageHeader } from '../components/PageHeader.jsx';
-import { SectionCard } from '../components/SectionCard.jsx';
-import { formatCurrency } from '../utils.jsx';
 import { apiClient } from '../api/client.js';
+import { Badge } from '../components/ui/Badge.jsx';
+import { Drawer } from '../components/ui/Drawer.jsx';
+import { ConfirmationModal } from '../components/ui/ConfirmationModal.jsx';
+import { Skeleton, TableSkeletonRows } from '../components/ui/Skeleton.jsx';
+import { formatCurrency } from '../utils.jsx';
 
 export function OrdersPage() {
   const { pushToast } = useToast();
@@ -43,38 +48,40 @@ export function OrdersPage() {
   const [syncing, setSyncing] = React.useState(false);
   const [filter, setFilter] = React.useState('all');
   const [search, setSearch] = React.useState('');
-  const [startDate, setStartDate] = React.useState('');
-  const [endDate, setEndDate] = React.useState('');
   const [page, setPage] = React.useState(1);
   const [totalPages, setTotalPages] = React.useState(1);
   const [totalOrders, setTotalOrders] = React.useState(0);
   const [selectedOrder, setSelectedOrder] = React.useState(null);
   const [actionLoadingId, setActionLoadingId] = React.useState(null);
 
-  const loadOrders = async (showToast = false) => {
+  // Cancellation modal state
+  const [cancelModalOrder, setCancelModalOrder] = React.useState(null);
+  const [cancelling, setCancelling] = React.useState(false);
+
+  const loadOrders = async (silent = false) => {
     try {
-      setSyncing(true);
+      if (!silent) setSyncing(true);
 
       const params = new URLSearchParams();
       if (search.trim()) params.append('search', search.trim());
       if (filter !== 'all') params.append('status', filter);
-      if (startDate) params.append('startDate', startDate);
-      if (endDate) params.append('endDate', endDate);
       params.append('page', String(page));
       params.append('limit', '25');
 
       const data = await apiClient.get(`/orders?${params.toString()}`);
-      setOrders(data.orders || []);
-      setTotalOrders(data.total || 0);
-      setTotalPages(data.totalPages || 1);
-      if (data.counts) {
+      setOrders(data?.orders || []);
+      setTotalOrders(data?.total || 0);
+      setTotalPages(data?.totalPages || 1);
+      if (data?.counts) {
         setCounts(data.counts);
       }
 
-      if (showToast) pushToast('Orders updated from backend database.', 'success');
+      if (!silent && !loading) {
+        pushToast('Orders list refreshed from database.', 'success');
+      }
     } catch (err) {
       console.error(err);
-      pushToast(err.message || 'Failed to load orders from backend.', 'error');
+      if (!silent) pushToast(err.message || 'Failed to load orders from backend.', 'error');
     } finally {
       setLoading(false);
       setSyncing(false);
@@ -82,568 +89,600 @@ export function OrdersPage() {
   };
 
   React.useEffect(() => {
-    loadOrders();
-  }, [page, filter, startDate, endDate]);
+    loadOrders(true);
+  }, [page, filter]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     setPage(1);
-    loadOrders();
+    loadOrders(false);
   };
 
+  // 1. CALL CUSTOMER
   const handleCallOrder = async (orderId) => {
     setActionLoadingId(`call-${orderId}`);
     try {
+      pushToast(`Initiating AI confirmation call for order ${orderId}...`, 'default');
       const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/call`, {});
-      if (data.ok) {
-        pushToast(`Call queued for order ${orderId}`, 'success');
-        await loadOrders(false);
+      if (data?.ok) {
+        pushToast(`Call queued for order ${orderId} (SID: ${data.providerCallSid})`, 'success');
+        await loadOrders(true);
       } else {
-        throw new Error(data.error || 'Call failed');
+        throw new Error(data?.error || 'Call request rejected');
       }
     } catch (err) {
-      pushToast(err.message || 'Call failed.', 'error');
+      pushToast(err.message || 'Failed to place call.', 'error');
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  const handleUpdateOrderStatus = async (orderId, newStatus, tag) => {
-    setActionLoadingId(`status-${orderId}`);
+  // 2. CONFIRM ORDER
+  const handleConfirmOrder = async (orderId) => {
+    setActionLoadingId(`confirm-${orderId}`);
     try {
-      const res = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/tag`, {
-        status: newStatus,
-        tag: tag || `Merchant Action: ${newStatus}`
+      pushToast(`Confirming order ${orderId}...`, 'default');
+      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/tag`, {
+        status: 'Confirmed',
+        tag: 'Merchant Confirmed'
       });
-      if (res && res.ok) {
-        pushToast(`Order marked as ${newStatus}`, 'success');
-        // Update local state immediately
-        setOrders((prev) =>
-          prev.map((o) => (o.id === orderId ? { ...o, status: newStatus, tag } : o))
-        );
-        if (selectedOrder && selectedOrder.id === orderId) {
-          setSelectedOrder((prev) => ({ ...prev, status: newStatus, tag }));
+      if (data?.ok) {
+        pushToast(`Order ${orderId} marked as CONFIRMED.`, 'success');
+        if (selectedOrder?.id === orderId) {
+          setSelectedOrder((prev) => ({ ...prev, status: 'Confirmed', tag: 'Merchant Confirmed' }));
         }
+        await loadOrders(true);
       }
     } catch (err) {
-      pushToast(err.message || 'Failed to update order status.', 'error');
+      pushToast(err.message || 'Failed to confirm order.', 'error');
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  const statusClass = (status) => {
-    if (status === 'Confirmed') return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
-    if (status === 'Cancelled') return 'bg-red-500/10 text-red-600 dark:text-red-400';
-    return 'bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))]';
+  // 3. CANCEL ORDER
+  const executeCancelOrder = async () => {
+    if (!cancelModalOrder) return;
+    const orderId = cancelModalOrder.id;
+    setCancelling(true);
+    try {
+      pushToast(`Cancelling order ${orderId}...`, 'default');
+      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/tag`, {
+        status: 'Cancelled',
+        tag: 'Merchant Cancelled'
+      });
+      if (data?.ok) {
+        pushToast(`Order ${orderId} marked as CANCELLED.`, 'success');
+        if (selectedOrder?.id === orderId) {
+          setSelectedOrder((prev) => ({ ...prev, status: 'Cancelled', tag: 'Merchant Cancelled' }));
+        }
+        setCancelModalOrder(null);
+        await loadOrders(true);
+      }
+    } catch (err) {
+      pushToast(err.message || 'Failed to cancel order.', 'error');
+    } finally {
+      setCancelling(false);
+    }
   };
 
-  const callClass = (status) => {
-    if (status === 'completed') return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
-    if (status === 'failed' || status === 'busy' || status === 'no-answer') {
-      return 'bg-red-500/10 text-red-600 dark:text-red-400';
+  // 4. SEND WHATSAPP
+  const handleSendWhatsApp = async (orderId) => {
+    setActionLoadingId(`wa-${orderId}`);
+    try {
+      pushToast(`Dispatching WhatsApp confirmation to customer for order ${orderId}...`, 'default');
+      const data = await apiClient.post(`/orders/${encodeURIComponent(orderId)}/whatsapp`, {});
+      if (data?.ok) {
+        pushToast(`WhatsApp confirmation message sent successfully!`, 'success');
+      } else {
+        throw new Error(data?.reason || 'WhatsApp message dispatch failed.');
+      }
+    } catch (err) {
+      pushToast(err.message || 'Failed to send WhatsApp message.', 'error');
+    } finally {
+      setActionLoadingId(null);
     }
-    if (status === 'ringing' || status === 'in-progress' || status === 'queued') {
-      return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 animate-pulse';
+  };
+
+  // Helper for risk badge
+  const renderRiskBadge = (score = 0) => {
+    if (score >= 60) {
+      return (
+        <Badge variant="riskHigh" size="sm">
+          High Risk ({score})
+        </Badge>
+      );
     }
-    return 'bg-[hsl(var(--muted))] text-[hsl(var(--foreground)/0.6)]';
+    if (score >= 30) {
+      return (
+        <Badge variant="riskMedium" size="sm">
+          Med Risk ({score})
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="riskLow" size="sm">
+        Low Risk ({score})
+      </Badge>
+    );
   };
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="py-6 px-4 sm:px-8 space-y-6 max-w-[1720px] mx-auto">
+      {/* Header and Controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-soft">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[hsl(var(--foreground))] md:text-3xl">
-            Shopify COD Orders
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
+              Order Operations
+            </span>
+            <span className="text-xs font-mono font-medium text-slate-500">
+              {totalOrders} Total Orders
+            </span>
+          </div>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight mt-1">
+            Shopify Orders & COD Confirmations
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-[hsl(var(--foreground)/0.65)]">
-            Review incoming cash-on-delivery orders, confirmation statuses, customer details, and call outcomes.
+          <p className="text-xs text-slate-500 mt-0.5">
+            Manage incoming Cash on Delivery orders, inspect customer shipping details, and trigger Roman Urdu voice confirmation.
           </p>
         </div>
 
-        <button
-          onClick={() => loadOrders(true)}
-          disabled={syncing}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-2 text-xs font-semibold shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
-        >
-          {syncing ? <Loader2 size={14} className="animate-spin text-[hsl(var(--primary))]" /> : <RefreshCw size={14} />}
-          <span>Refresh Orders</span>
-        </button>
-      </div>
-
-      {/* KPI Summary Cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Total Orders</span>
-            <ListFilter size={16} className="text-[hsl(var(--primary))]" />
-          </div>
-          <div className="mt-2 text-2xl font-bold text-[hsl(var(--foreground))]">{counts.total || totalOrders}</div>
-        </div>
-
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Confirmed</span>
-            <BadgeCheck size={16} className="text-emerald-600" />
-          </div>
-          <div className="mt-2 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{counts.confirmed}</div>
-        </div>
-
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Pending Confirmation</span>
-            <TimerReset size={16} className="text-[hsl(var(--primary))]" />
-          </div>
-          <div className="mt-2 text-2xl font-bold text-[hsl(var(--primary))]">{counts.pending}</div>
-        </div>
-
-        <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Cancelled</span>
-            <ShieldAlert size={16} className="text-red-600" />
-          </div>
-          <div className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">{counts.cancelled}</div>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => loadOrders(false)}
+            disabled={syncing}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Table Card */}
-      <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-xs">
-        {/* Search & Filter Toolbar */}
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between pb-4 border-b border-[hsl(var(--border))]">
-          <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md">
-            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[hsl(var(--foreground)/0.4)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by order ID, customer name, or phone..."
-              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] py-2 pl-9 pr-3 text-xs outline-none focus:border-[hsl(var(--primary))] transition"
-            />
-          </form>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Date Filters */}
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
-              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))]"
-              title="From Date"
-            />
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
-              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))]"
-              title="To Date"
-            />
-
-            {/* Filter Pills */}
-            <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0">
-              {[
-                ['all', 'All'],
-                ['pending', 'Pending'],
-                ['confirmed', 'Confirmed'],
-                ['cancelled', 'Cancelled'],
-                ['failed', 'Failed Call']
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => { setFilter(key); setPage(1); }}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                    filter === key
-                      ? 'bg-[hsl(var(--primary))] text-white'
-                      : 'border border-[hsl(var(--border))] text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted))]'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+      {/* Filter and Search Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-soft flex flex-col md:flex-row md:items-center justify-between gap-3">
+        {/* Status Pills */}
+        <div className="flex items-center flex-wrap gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+          {[
+            { id: 'all', label: 'All Orders', count: counts.total || totalOrders },
+            { id: 'pending', label: 'Pending COD', count: counts.pending },
+            { id: 'confirmed', label: 'Confirmed', count: counts.confirmed },
+            { id: 'cancelled', label: 'Cancelled', count: counts.cancelled }
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setFilter(tab.id);
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                filter === tab.id
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>{tab.label}</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  filter === tab.id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {tab.count || 0}
+              </span>
+            </button>
+          ))}
         </div>
 
-        {/* Orders Table */}
-        {loading ? (
-          <div className="py-20 text-center">
-            <Loader2 size={24} className="mx-auto animate-spin text-[hsl(var(--primary))]" />
-            <div className="mt-2 text-xs font-medium text-[hsl(var(--foreground)/0.6)]">Loading orders from database...</div>
-          </div>
-        ) : orders.length === 0 ? (
-          <div className="py-16 text-center">
-            <Package size={36} className="mx-auto text-[hsl(var(--foreground)/0.3)]" />
-            <div className="mt-3 text-sm font-bold text-[hsl(var(--foreground))]">No orders found</div>
-            <div className="mt-1 text-xs text-[hsl(var(--foreground)/0.6)]">
-              No orders match the selected filters or search parameters.
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] text-[11px] font-bold uppercase tracking-wider text-[hsl(var(--foreground)/0.6)]">
+        {/* Search input */}
+        <form onSubmit={handleSearchSubmit} className="relative w-full md:w-80">
+          <input
+            type="text"
+            placeholder="Search order #, customer, phone..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full px-3.5 py-2 pl-9 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs text-slate-900 shadow-xs"
+          />
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+        </form>
+      </div>
+
+      {/* Orders Data Table */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-soft overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100">
+              <tr>
+                <th className="px-5 py-3.5">Order</th>
+                <th className="px-5 py-3.5">Customer & Phone</th>
+                <th className="px-5 py-3.5">City & Destination</th>
+                <th className="px-5 py-3.5">Total Amount</th>
+                <th className="px-5 py-3.5">Risk Score</th>
+                <th className="px-5 py-3.5">Order Status</th>
+                <th className="px-5 py-3.5">AI Call Status</th>
+                <th className="px-5 py-3.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700">
+              {loading ? (
+                <TableSkeletonRows rows={8} cols={8} />
+              ) : orders.length === 0 ? (
                 <tr>
-                  <th className="py-3 px-3">Order</th>
-                  <th className="py-3 px-3">Customer</th>
-                  <th className="py-3 px-3">Items</th>
-                  <th className="py-3 px-3">Phone</th>
-                  <th className="py-3 px-3">Total (PKR)</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3">Call Outcome</th>
-                  <th className="py-3 px-3">Retries</th>
-                  <th className="py-3 px-3 text-right">Actions</th>
+                  <td colSpan={8} className="px-6 py-16 text-center text-slate-400">
+                    <Package className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    <div className="font-semibold text-slate-600">No orders matching current filter</div>
+                    <div className="text-xs text-slate-400 mt-1">Try switching to "All Orders" or syncing with Shopify</div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-[hsl(var(--border))]">
-                {orders.map((o) => (
-                  <tr key={o.id} className="hover:bg-[hsl(var(--muted)/0.35)] transition-colors">
-                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
-                      <div className="flex items-center gap-1.5">
-                        <span>{o.orderNumber || o.id}</span>
-                        {o.tag ? (
-                          <span className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-[9px] font-medium text-[hsl(var(--foreground)/0.6)]">
-                            {o.tag}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="text-[10px] text-[hsl(var(--foreground)/0.5)] font-normal">
-                        {o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}
-                      </div>
-                    </td>
+              ) : (
+                orders.map((ord) => {
+                  const isCallLoading = actionLoadingId === `call-${ord.id}`;
+                  const isConfirmLoading = actionLoadingId === `confirm-${ord.id}`;
+                  const isWaLoading = actionLoadingId === `wa-${ord.id}`;
 
-                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground))]">
-                      {o.customerName || 'Customer'}
-                      {o.city ? <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">{o.city}</div> : null}
-                    </td>
+                  return (
+                    <tr key={ord.id} className="hover:bg-slate-50/80 transition-colors">
+                      {/* 1. Order ID */}
+                      <td className="px-5 py-4">
+                        <div className="font-bold text-slate-900">{ord.name || ord.id}</div>
+                        <div className="text-[11px] text-slate-400">
+                          {new Date(ord.createdAt).toLocaleDateString()}
+                        </div>
+                      </td>
 
-                    <td className="py-3 px-3 text-[hsl(var(--foreground)/0.8)] max-w-[180px] truncate" title={o.productName}>
-                      {o.productName || 'Order Items'}
-                    </td>
+                      {/* 2. Customer */}
+                      <td className="px-5 py-4">
+                        <div className="font-semibold text-slate-900">
+                          {ord.customer?.firstName
+                            ? `${ord.customer.firstName} ${ord.customer.lastName || ''}`
+                            : ord.customerName || 'Customer'}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          {ord.customer?.phone || ord.phone || 'No phone'}
+                        </div>
+                      </td>
 
-                    <td className="py-3 px-3 font-mono text-[11px] text-[hsl(var(--foreground))]">
-                      {o.phone || 'No phone'}
-                    </td>
+                      {/* 3. City */}
+                      <td className="px-5 py-4">
+                        <div className="font-medium text-slate-800">
+                          {ord.shippingAddress?.city || ord.city || 'Pakistan'}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate max-w-[150px]">
+                          {ord.shippingAddress?.address1 || 'Standard Shipping'}
+                        </div>
+                      </td>
 
-                    <td className="py-3 px-3 font-semibold text-[hsl(var(--foreground))]">
-                      {formatCurrency(o.totalAmount || o.total)}
-                    </td>
+                      {/* 4. Total Amount */}
+                      <td className="px-5 py-4">
+                        <div className="font-bold text-slate-900">
+                          Rs {parseFloat(ord.totalAmount || 0).toLocaleString()}
+                        </div>
+                        <span className="text-[10px] text-slate-400 uppercase font-semibold">COD</span>
+                      </td>
 
-                    <td className="py-3 px-3">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusClass(o.status)}`}>
-                        {o.status || 'Pending'}
-                      </span>
-                    </td>
+                      {/* 5. Risk Score */}
+                      <td className="px-5 py-4">
+                        {renderRiskBadge(ord.riskScore || ord.risk || 0)}
+                      </td>
 
-                    <td className="py-3 px-3">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${callClass(o.callStatus)}`}>
-                        {o.callStatus || 'pending'}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 font-medium text-[hsl(var(--foreground)/0.7)]">
-                      {o.retryCount || 0}
-                    </td>
-
-                    <td className="py-3 px-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => setSelectedOrder(o)}
-                          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1.5 text-[hsl(var(--foreground)/0.7)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] shadow-xs transition"
-                          title="View order details"
+                      {/* 6. Order Status */}
+                      <td className="px-5 py-4">
+                        <Badge
+                          variant={
+                            ord.status?.toLowerCase().includes('confirm')
+                              ? 'confirmed'
+                              : ord.status?.toLowerCase().includes('cancel')
+                              ? 'cancelled'
+                              : 'pending'
+                          }
                         >
-                          <Eye size={13} />
-                        </button>
+                          {ord.status || 'Pending'}
+                        </Badge>
+                      </td>
 
-                        <button
-                          onClick={() => handleCallOrder(o.id)}
-                          disabled={actionLoadingId === `call-${o.id}`}
-                          className="inline-flex items-center gap-1 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-[11px] font-semibold text-[hsl(var(--foreground))] shadow-xs hover:bg-[hsl(var(--muted))] disabled:opacity-50 transition"
-                          title="Trigger Urdu voice call"
+                      {/* 7. Call Status */}
+                      <td className="px-5 py-4">
+                        <Badge
+                          variant={
+                            ord.callStatus === 'completed'
+                              ? 'confirmed'
+                              : ord.callStatus === 'calling'
+                              ? 'calling'
+                              : ord.callStatus === 'failed'
+                              ? 'failed'
+                              : 'queued'
+                          }
                         >
-                          {actionLoadingId === `call-${o.id}` ? (
-                            <Loader2 size={12} className="animate-spin text-[hsl(var(--primary))]" />
-                          ) : (
-                            <PhoneCall size={12} className="text-[hsl(var(--primary))]" />
-                          )}
-                          <span>Call</span>
-                        </button>
+                          {ord.callStatus || 'Queued'}
+                        </Badge>
+                      </td>
 
-                        {o.status !== 'Confirmed' ? (
+                      {/* 8. Action Buttons (All Real APIs) */}
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* View Drawer */}
                           <button
-                            onClick={() => handleUpdateOrderStatus(o.id, 'Confirmed', 'Merchant Confirmed')}
-                            disabled={actionLoadingId === `status-${o.id}`}
-                            className="rounded-lg bg-emerald-500/10 p-1.5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 shadow-xs transition"
+                            type="button"
+                            onClick={() => setSelectedOrder(ord)}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                            title="Inspect order & items"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          {/* Call Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleCallOrder(ord.id)}
+                            disabled={isCallLoading}
+                            className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+                            title="Call customer via AI"
+                          >
+                            {isCallLoading ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <PhoneForwarded className="w-4 h-4" />
+                            )}
+                          </button>
+
+                          {/* Send WhatsApp */}
+                          <button
+                            type="button"
+                            onClick={() => handleSendWhatsApp(ord.id)}
+                            disabled={isWaLoading}
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition-colors disabled:opacity-50"
+                            title="Send WhatsApp confirmation"
+                          >
+                            {isWaLoading ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Send className="w-4 h-4" />
+                            )}
+                          </button>
+
+                          {/* Confirm Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmOrder(ord.id)}
+                            disabled={isConfirmLoading}
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition-colors disabled:opacity-50"
                             title="Confirm Order"
                           >
-                            <CheckCircle2 size={13} />
+                            {isConfirmLoading ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-4 h-4" />
+                            )}
                           </button>
-                        ) : null}
 
-                        {o.status !== 'Cancelled' ? (
+                          {/* Cancel Button */}
                           <button
-                            onClick={() => handleUpdateOrderStatus(o.id, 'Cancelled', 'Merchant Cancelled')}
-                            disabled={actionLoadingId === `status-${o.id}`}
-                            className="rounded-lg bg-red-500/10 p-1.5 text-red-600 dark:text-red-400 hover:bg-red-500/20 shadow-xs transition"
+                            type="button"
+                            onClick={() => setCancelModalOrder(ord)}
+                            className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg transition-colors"
                             title="Cancel Order"
                           >
-                            <XCircle size={13} />
+                            <XCircle className="w-4 h-4" />
                           </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {/* Pagination Bar */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between pt-4 border-t border-[hsl(var(--border))] mt-4 text-xs text-[hsl(var(--foreground)/0.6)]">
-            <div>
-              Showing page <span className="font-semibold text-[hsl(var(--foreground))]">{page}</span> of{' '}
-              <span className="font-semibold text-[hsl(var(--foreground))]">{totalPages}</span> ({totalOrders} total orders)
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 bg-slate-50/50">
+          <div>
+            Showing Page <span className="font-bold text-slate-800">{page}</span> of{' '}
+            <span className="font-bold text-slate-800">{totalPages}</span> ({totalOrders} orders)
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(p - 1, 1))}
+              disabled={page <= 1}
+              className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
+              disabled={page >= totalPages}
+              className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-40"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Slide-over Customer & Order Information Drawer */}
+      <Drawer
+        isOpen={Boolean(selectedOrder)}
+        onClose={() => setSelectedOrder(null)}
+        title={selectedOrder?.name || selectedOrder?.id}
+        subtitle={`Placed on ${selectedOrder ? new Date(selectedOrder.createdAt).toLocaleString() : ''}`}
+        badge={
+          <Badge
+            variant={
+              selectedOrder?.status?.toLowerCase().includes('confirm')
+                ? 'confirmed'
+                : selectedOrder?.status?.toLowerCase().includes('cancel')
+                ? 'cancelled'
+                : 'pending'
+            }
+          >
+            {selectedOrder?.status}
+          </Badge>
+        }
+        footer={
+          selectedOrder && (
+            <div className="flex items-center gap-2 w-full justify-between">
+              <button
+                type="button"
+                onClick={() => setCancelModalOrder(selectedOrder)}
+                className="px-3.5 py-2 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg text-xs font-semibold transition-colors"
+              >
+                Cancel Order
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSendWhatsApp(selectedOrder.id)}
+                  className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Send WhatsApp</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCallOrder(selectedOrder.id)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm transition-colors"
+                >
+                  <PhoneForwarded className="w-3.5 h-3.5" />
+                  <span>Call Customer</span>
+                </button>
+              </div>
+            </div>
+          )
+        }
+      >
+        {selectedOrder && (
+          <div className="space-y-6 text-xs text-slate-700">
+            {/* Customer Contact Box */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-indigo-600" />
+                  <span>Customer Contact</span>
+                </h3>
+                {renderRiskBadge(selectedOrder.riskScore || selectedOrder.risk || 0)}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Customer Name</span>
+                  <span className="font-bold text-slate-900">
+                    {selectedOrder.customer?.firstName
+                      ? `${selectedOrder.customer.firstName} ${selectedOrder.customer.lastName || ''}`
+                      : selectedOrder.customerName || 'Customer'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Mobile Number</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    {selectedOrder.customer?.phone || selectedOrder.phone}
+                  </span>
+                </div>
+                <div className="col-span-2">
+                  <span className="text-slate-400 block text-[10px] flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-slate-400" />
+                    Delivery Destination
+                  </span>
+                  <span className="font-medium text-slate-800">
+                    {selectedOrder.shippingAddress?.address1 || 'Address verified on call'}
+                    {selectedOrder.shippingAddress?.city ? `, ${selectedOrder.shippingAddress.city}` : ''}
+                    {selectedOrder.shippingAddress?.province ? `, ${selectedOrder.shippingAddress.province}` : ''}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
-              >
-                <ChevronLeft size={15} />
-              </button>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-                className="rounded-lg border border-[hsl(var(--border))] p-1.5 hover:bg-[hsl(var(--muted))] disabled:opacity-40 transition"
-              >
-                <ChevronRight size={15} />
-              </button>
+            {/* Line Items Preview */}
+            <div className="space-y-2">
+              <h3 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <ShoppingBag className="w-4 h-4 text-indigo-600" />
+                <span>Ordered Items</span>
+              </h3>
+
+              {selectedOrder.items?.length ? (
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden">
+                  {selectedOrder.items.map((it, idx) => (
+                    <div key={idx} className="p-3 flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900">{it.title}</div>
+                        {it.variant && <div className="text-[10px] text-slate-400">{it.variant}</div>}
+                        <div className="text-[11px] text-slate-500">Qty: {it.qty}</div>
+                      </div>
+                      <div className="font-mono font-bold text-slate-900">
+                        Rs {parseFloat(it.price || 0).toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-3 bg-white rounded-xl border border-slate-200 flex justify-between items-center">
+                  <span className="font-semibold text-slate-800">{selectedOrder.productName || 'Order Package'}</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    Rs {parseFloat(selectedOrder.totalAmount || 0).toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Financial Summary */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center">
+              <div>
+                <span className="text-slate-400 block text-[10px]">Payment Terms</span>
+                <span className="font-bold text-slate-900">Cash on Delivery (COD)</span>
+              </div>
+              <div className="text-right">
+                <span className="text-slate-400 block text-[10px]">Net Payable</span>
+                <span className="text-base font-extrabold text-indigo-700">
+                  Rs {parseFloat(selectedOrder.totalAmount || 0).toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            {/* Call History Timeline */}
+            <div className="space-y-2">
+              <h3 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <PhoneCall className="w-4 h-4 text-indigo-600" />
+                <span>Call Attempt Timeline</span>
+              </h3>
+
+              {selectedOrder.recentCalls?.length ? (
+                <div className="space-y-2">
+                  {selectedOrder.recentCalls.map((c) => (
+                    <div
+                      key={c.id}
+                      className="p-3 bg-white rounded-xl border border-slate-200 flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900">{c.outcome || 'Attempt'}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {c.providerCallSid || 'Pending SID'} • {new Date(c.createdAt).toLocaleTimeString()}
+                        </div>
+                      </div>
+                      <Badge variant="queued" size="sm">{c.durationSec || 0}s</Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center text-slate-400">
+                  No automated calls dispatched yet for this order.
+                </div>
+              )}
             </div>
           </div>
         )}
-      </div>
+      </Drawer>
 
-      {/* Order Details Drawer / Modal */}
-      {selectedOrder ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-          <div className="relative w-full max-w-lg rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-[hsl(var(--border))]">
-              <div className="flex items-center gap-2">
-                <span className="text-base font-bold text-[hsl(var(--foreground))]">
-                  Order {selectedOrder.orderNumber || selectedOrder.id}
-                </span>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusClass(selectedOrder.status)}`}>
-                  {selectedOrder.status}
-                </span>
-              </div>
-              <button
-                onClick={() => setSelectedOrder(null)}
-                className="rounded-lg p-1 text-[hsl(var(--foreground)/0.5)] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-4 text-xs">
-              {/* Customer Profile & Address */}
-              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-3 space-y-2">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
-                  <MapPin size={14} className="text-[hsl(var(--primary))]" />
-                  <span>Customer & Shipping Address</span>
-                </div>
-                <div className="font-semibold text-[hsl(var(--foreground))]">{selectedOrder.customerName}</div>
-                <div className="text-[hsl(var(--foreground)/0.7)] flex items-center gap-1.5 font-mono">
-                  <Phone size={12} />
-                  <span>{selectedOrder.phone}</span>
-                </div>
-                {selectedOrder.shippingAddress ? (
-                  <div className="text-[hsl(var(--foreground)/0.7)] leading-relaxed">
-                    {selectedOrder.shippingAddress.address1} {selectedOrder.shippingAddress.address2}
-                    <br />
-                    {selectedOrder.shippingAddress.city}, {selectedOrder.shippingAddress.province}{' '}
-                    {selectedOrder.shippingAddress.zip}, {selectedOrder.shippingAddress.country}
-                  </div>
-                ) : (
-                  <div className="text-[hsl(var(--foreground)/0.5)]">No shipping address recorded.</div>
-                )}
-              </div>
-
-              {/* Items Summary */}
-              <div className="rounded-xl border border-[hsl(var(--border))] p-3 space-y-2">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
-                  <Package size={14} className="text-[hsl(var(--primary))]" />
-                  <span>Order Items ({selectedOrder.items?.length || 1})</span>
-                </div>
-                {selectedOrder.items && selectedOrder.items.length > 0 ? (
-                  <div className="divide-y divide-[hsl(var(--border))]">
-                    {selectedOrder.items.map((item, idx) => (
-                      <div key={idx} className="flex justify-between py-1.5 text-[hsl(var(--foreground)/0.8)]">
-                        <div>
-                          <div className="font-semibold">{item.title}</div>
-                          {item.variant ? <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">{item.variant}</div> : null}
-                          <div className="text-[10px] text-[hsl(var(--foreground)/0.5)]">Qty: {item.qty}</div>
-                        </div>
-                        <div className="font-mono font-semibold">{formatCurrency(item.price * item.qty)}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-[hsl(var(--foreground)/0.8)] font-semibold">{selectedOrder.productName}</div>
-                )}
-                <div className="pt-2 border-t border-[hsl(var(--border))] flex justify-between font-bold text-sm text-[hsl(var(--foreground))]">
-                  <span>Total ({selectedOrder.payment || 'Cash on Delivery'})</span>
-                  <span className="font-mono">{formatCurrency(selectedOrder.totalAmount || selectedOrder.total)}</span>
-                </div>
-              </div>
-
-              {/* Payment & Eligibility Info */}
-              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-2">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <CreditCard size={14} className="text-[hsl(var(--primary))]" />
-                    <span>Payment & Calling Eligibility</span>
-                  </div>
-                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
-                    COD Eligible
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[11px]">
-                  <div>
-                    <span className="text-[hsl(var(--foreground)/0.6)]">Gateway:</span>
-                    <div className="font-medium text-[hsl(var(--foreground))]">{selectedOrder.payment || 'Cash on Delivery (COD)'}</div>
-                  </div>
-                  <div>
-                    <span className="text-[hsl(var(--foreground)/0.6)]">Calling Window:</span>
-                    <div className="font-medium text-[hsl(var(--foreground))]">09:00 - 21:00 PKT</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Automated COD Confirmation Timeline */}
-              <div className="rounded-xl border border-[hsl(var(--border))] p-3.5 space-y-3">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center gap-1.5">
-                  <Clock size={14} className="text-[hsl(var(--primary))]" />
-                  <span>Confirmation Workflow Timeline</span>
-                </div>
-
-                <div className="relative pl-5 space-y-3 border-l-2 border-[hsl(var(--primary)/0.3)] ml-2">
-                  {/* Step 1: Order Created */}
-                  <div className="relative">
-                    <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-emerald-500 border-2 border-[hsl(var(--card))]" />
-                    <div className="font-semibold text-[hsl(var(--foreground))]">1. Order Created</div>
-                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
-                      {selectedOrder.createdAt ? new Date(selectedOrder.createdAt).toLocaleString() : 'Recorded in Shopify'}
-                    </div>
-                  </div>
-
-                  {/* Step 2: Confirmation Queued */}
-                  <div className="relative">
-                    <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-blue-500 border-2 border-[hsl(var(--card))]" />
-                    <div className="font-semibold text-[hsl(var(--foreground))]">2. Confirmation Queued</div>
-                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
-                      Eligible COD order pushed to BullMQ priority queue
-                    </div>
-                  </div>
-
-                  {/* Step 3: Call Attempt 1 */}
-                  <div className="relative">
-                    <div className={`absolute -left-[25px] top-0 h-3 w-3 rounded-full border-2 border-[hsl(var(--card))] ${
-                      selectedOrder.callStatus === 'completed' || selectedOrder.callStatus === 'confirmed'
-                        ? 'bg-emerald-500'
-                        : selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer'
-                        ? 'bg-amber-500'
-                        : 'bg-blue-500 animate-pulse'
-                    }`} />
-                    <div className="font-semibold text-[hsl(var(--foreground))]">
-                      3. Call Attempt 1 ({selectedOrder.callStatus || 'pending'})
-                    </div>
-                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
-                      {selectedOrder.callSid ? `Twilio SID: ${selectedOrder.callSid.slice(0, 16)}...` : 'Automated Urdu voice agent dispatched'}
-                    </div>
-                  </div>
-
-                  {/* Step 4: Retries or Follow-up */}
-                  {selectedOrder.retryCount > 0 ? (
-                    <div className="relative">
-                      <div className="absolute -left-[25px] top-0 h-3 w-3 rounded-full bg-amber-500 border-2 border-[hsl(var(--card))]" />
-                      <div className="font-semibold text-[hsl(var(--foreground))]">
-                        4. Retried ({selectedOrder.retryCount} attempt{selectedOrder.retryCount > 1 ? 's' : ''})
-                      </div>
-                      <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
-                        Automatic retry scheduled after customer unavailable
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Step 5: Final Result */}
-                  <div className="relative">
-                    <div className={`absolute -left-[25px] top-0 h-3 w-3 rounded-full border-2 border-[hsl(var(--card))] ${
-                      selectedOrder.status === 'Confirmed'
-                        ? 'bg-emerald-500'
-                        : selectedOrder.status === 'Cancelled'
-                        ? 'bg-red-500'
-                        : 'bg-blue-500'
-                    }`} />
-                    <div className="font-semibold text-[hsl(var(--foreground))]">
-                      {selectedOrder.status === 'Confirmed' ? '5. Confirmed & Tagged in Shopify' : selectedOrder.status === 'Cancelled' ? '5. Cancelled & Tagged' : '5. In Progress'}
-                    </div>
-                    <div className="text-[10px] text-[hsl(var(--foreground)/0.6)]">
-                      Status: {selectedOrder.status}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* WhatsApp Fallback Status */}
-              <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.2)] p-3 space-y-1.5">
-                <div className="font-bold text-[hsl(var(--foreground))] flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <MessageSquare size={14} className="text-[hsl(var(--primary))]" />
-                    <span>WhatsApp Fallback (WA-AKG)</span>
-                  </div>
-                  <span className="text-[10px] font-medium text-[hsl(var(--foreground)/0.6)]">
-                    {selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer' ? 'Dispatched' : 'Standby'}
-                  </span>
-                </div>
-                <div className="text-[11px] text-[hsl(var(--foreground)/0.7)]">
-                  {selectedOrder.callStatus === 'failed' || selectedOrder.callStatus === 'no-answer'
-                    ? 'Fallback confirmation message dispatched in Roman Urdu with quick confirm/cancel buttons.'
-                    : 'Active standby — will dispatch automatically if call attempts are unanswered.'}
-                </div>
-              </div>
-
-              {/* Drawer Actions */}
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[hsl(var(--border))]">
-                <button
-                  onClick={() => handleCallOrder(selectedOrder.id)}
-                  disabled={actionLoadingId === `call-${selectedOrder.id}`}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(var(--primary))] px-3.5 py-2 text-xs font-semibold text-white shadow-xs"
-                >
-                  <PhoneCall size={13} />
-                  <span>Trigger Call</span>
-                </button>
-
-                <button
-                  onClick={() => handleUpdateOrderStatus(selectedOrder.id, 'Confirmed', 'Manual Confirmation')}
-                  className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
-                >
-                  Confirm Order
-                </button>
-
-                <button
-                  onClick={() => handleUpdateOrderStatus(selectedOrder.id, 'Cancelled', 'Manual Cancellation')}
-                  className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/20"
-                >
-                  Cancel Order
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/* Confirmation Dialog for Cancel Order */}
+      <ConfirmationModal
+        isOpen={Boolean(cancelModalOrder)}
+        onClose={() => setCancelModalOrder(null)}
+        onConfirm={executeCancelOrder}
+        loading={cancelling}
+        title="Cancel Order Confirmation"
+        message={`Are you sure you want to cancel order ${cancelModalOrder?.name || cancelModalOrder?.id}? This will flag the order as CANCELLED in Dial Mate and stop all future automated confirmation calls.`}
+        confirmText="Confirm Order Cancellation"
+        cancelText="Keep Order"
+        tone="danger"
+      />
     </div>
   );
 }

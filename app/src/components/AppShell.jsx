@@ -142,31 +142,31 @@ export function AppShell({ route, children }) {
       ) : null}
 
       <div className="mx-auto flex min-h-screen max-w-[1720px]">
-        {/* Enterprise Sidebar */}
+        {/* Enterprise Dark Sidebar */}
         <aside
-          className={`fixed inset-y-0 left-0 z-40 flex w-[86vw] max-w-[280px] flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-sm transition-transform duration-200 md:sticky md:w-64 md:translate-x-0 md:p-5 ${
+          className={`fixed inset-y-0 left-0 z-40 flex w-[86vw] max-w-[280px] flex-col border-r border-slate-800 bg-slate-950 text-slate-200 p-4 shadow-xl transition-transform duration-200 md:sticky md:w-64 md:translate-x-0 md:p-5 ${
             menuOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
           {/* Logo & Platform ID */}
           <div className="flex items-center justify-between gap-3">
-            <a href="#/dashboard" className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-[hsl(var(--secondary))] to-[hsl(var(--primary))] text-white shadow-sm">
+            <a href="#/dashboard" className="flex items-center gap-3 group">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-500 text-white shadow-md shadow-indigo-950/50 group-hover:scale-105 transition-transform">
                 <Bot size={20} />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate text-base font-bold tracking-tight text-[hsl(var(--foreground))]">Dial Mate</span>
-                  <span className="rounded-md bg-[hsl(var(--primary)/0.12)] px-1.5 py-0.5 text-[10px] font-semibold text-[hsl(var(--primary))]">v2.0</span>
+                  <span className="truncate text-base font-bold tracking-tight text-white">Dial Mate</span>
+                  <span className="rounded-md bg-indigo-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-400 border border-indigo-500/30">2.0</span>
                 </div>
-                <div className="truncate text-[11px] text-[hsl(var(--foreground)/0.6)]">
-                  Shopify AI Calling
+                <div className="truncate text-[11px] text-slate-400">
+                  AI Commerce Assistant
                 </div>
               </div>
             </a>
 
             <button
-              className="rounded-lg border border-[hsl(var(--border))] p-1.5 md:hidden"
+              className="rounded-lg border border-slate-800 p-1.5 text-slate-400 hover:text-white md:hidden"
               onClick={() => setMenuOpen(false)}
               aria-label="Close menu"
             >
@@ -175,32 +175,33 @@ export function AppShell({ route, children }) {
           </div>
 
           {/* Store Selector & Status Badge */}
-          <div className="mt-5 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.45)] p-3">
+          <div className="mt-5 rounded-xl border border-slate-800/80 bg-slate-900/80 p-3 shadow-inner">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-[hsl(var(--foreground)/0.7)]">
-                <Store size={14} />
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400">
+                <Store size={13} />
                 <span>Store</span>
               </div>
               <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                  connected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  connected ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
                 }`}
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
                 {connected ? 'Active' : 'Setup Needed'}
               </span>
             </div>
 
-            <div className="mt-2 truncate text-sm font-semibold text-[hsl(var(--foreground))]">{shopName}</div>
-            <div className="mt-0.5 truncate text-xs text-[hsl(var(--foreground)/0.6)]" title={displayShopDomain}>
+            <div className="mt-2 truncate text-xs font-bold text-white">{shopName}</div>
+            <div className="mt-0.5 truncate text-[11px] font-mono text-slate-400" title={displayShopDomain}>
               {displayShopDomain}
             </div>
 
             <button
+              type="button"
               onClick={() => setConnectModalOpen(true)}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs font-semibold text-[hsl(var(--foreground))] shadow-xs transition hover:bg-[hsl(var(--muted))]"
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-xs font-semibold text-slate-200 shadow-xs transition hover:bg-slate-700 hover:text-white"
             >
-              <Store size={13} className="text-[hsl(var(--primary))]" />
+              <Store size={12} className="text-indigo-400" />
               <span>{connected ? 'Switch Store' : 'Connect Shopify'}</span>
             </button>
           </div>
@@ -214,13 +215,13 @@ export function AppShell({ route, children }) {
                 <a
                   key={item.href}
                   href={item.href}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs font-medium transition-all ${
                     active
-                      ? 'bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))] font-semibold'
-                      : 'text-[hsl(var(--foreground)/0.7)] hover:bg-[hsl(var(--muted)/0.7)] hover:text-[hsl(var(--foreground))]'
+                      ? 'bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30 shadow-xs'
+                      : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100 border border-transparent'
                   }`}
                 >
-                  <item.icon size={17} className={active ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--foreground)/0.55)]'} />
+                  <item.icon size={16} className={active ? 'text-indigo-400' : 'text-slate-500'} />
                   <span>{item.label}</span>
                 </a>
               );
@@ -229,37 +230,37 @@ export function AppShell({ route, children }) {
 
           {/* System Runtime Status */}
           <div className="mt-auto pt-4">
-            <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)] p-3 text-xs">
-              <div className="flex items-center justify-between text-[hsl(var(--foreground)/0.7)]">
+            <div className="rounded-xl border border-slate-850 bg-slate-900/60 p-3 text-xs">
+              <div className="flex items-center justify-between text-slate-400">
                 <span className="flex items-center gap-1.5 font-medium">
-                  <Wifi size={13} className="text-emerald-500" />
-                  Engine Status
+                  <Wifi size={13} className="text-emerald-400 animate-pulse" />
+                  Voice Telephony
                 </span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">Live</span>
+                <span className="font-semibold text-emerald-400">Live</span>
               </div>
-              <div className="mt-2 space-y-1 text-[11px] text-[hsl(var(--foreground)/0.55)]">
+              <div className="mt-2 space-y-1 text-[11px] font-mono text-slate-400">
                 <div className="flex justify-between">
-                  <span>Twilio Voice</span>
-                  <span className="text-emerald-600">Connected</span>
+                  <span>Twilio Trunk</span>
+                  <span className="text-emerald-400">Ready</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Urdu AI Stream</span>
-                  <span className="text-emerald-600">Ready</span>
+                  <span>Urdu Speech</span>
+                  <span className="text-emerald-400">Active</span>
                 </div>
               </div>
             </div>
 
             {/* User Account & Logout */}
-            <div className="mt-3 flex items-center justify-between rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2">
+            <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/90 p-2">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[hsl(var(--primary)/0.1)] text-xs font-bold text-[hsl(var(--primary))]">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-xs font-bold text-indigo-400 border border-indigo-500/30">
                   {getInitials(state.session?.user?.name)}
                 </div>
                 <div className="min-w-0">
-                  <div className="truncate text-xs font-semibold text-[hsl(var(--foreground))]">
+                  <div className="truncate text-xs font-semibold text-slate-200">
                     {state.session?.user?.name || 'Merchant'}
                   </div>
-                  <div className="truncate text-[10px] text-[hsl(var(--foreground)/0.55)]">
+                  <div className="truncate text-[10px] text-slate-400">
                     {state.session?.user?.role || 'Store Owner'}
                   </div>
                 </div>
@@ -267,8 +268,9 @@ export function AppShell({ route, children }) {
 
               {hasToken ? (
                 <button
+                  type="button"
                   onClick={handleLogout}
-                  className="rounded-lg p-1.5 text-[hsl(var(--foreground)/0.55)] hover:bg-red-500/10 hover:text-red-600 transition"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 transition"
                   title="Sign Out / Disconnect Store"
                 >
                   <LogOut size={15} />
