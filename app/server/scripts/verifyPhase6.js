@@ -71,7 +71,8 @@ async function main() {
 
   // 4. Test against Real Database Shop
   console.log('\n--- STEP 4: Live Store Pipeline & Whitelist Test ---');
-  const shop = await prisma.shop.findFirst({ where: { isActive: true } });
+  const shop = await prisma.shop.findFirst({ where: { domain: '0qwck2-s1.myshopify.com' } }) 
+    || await prisma.shop.findFirst({ where: { isActive: true } });
   if (!shop) {
     throw new Error('No active shop found in database');
   }
@@ -83,12 +84,19 @@ async function main() {
       shopId: shop.id,
       shopifyOrderGid: `gid://shopify/Order/phase6-test-${Date.now()}`,
       orderNumber: `P6-${Math.floor(1000 + Math.random() * 9000)}`,
-      customerPhone: '+923000000001', // NOT in whitelist
       totalAmount: 1850,
       currency: 'PKR',
       status: 'Pending Confirmation',
       callStatus: 'pending',
       lineItemsSummary: 'Wireless Earbuds',
+      customer: {
+        create: {
+          shopId: shop.id,
+          phone: '+923000000001',
+          firstName: 'Asad',
+          lastName: 'Farooq'
+        }
+      },
       payload: JSON.stringify({
         id: `9990001`,
         order_number: 9991,
@@ -99,7 +107,7 @@ async function main() {
       })
     }
   });
-  console.log(`Created test order ${testOrderNonWhitelisted.orderNumber} (Phone: ${testOrderNonWhitelisted.customerPhone})`);
+  console.log(`Created test order ${testOrderNonWhitelisted.orderNumber} (Non-whitelisted)`);
 
   // Test Non-Whitelisted Safe Simulation
   const nonWhitelistedCall = await CallWorkflowService.initiateCall({
@@ -138,12 +146,19 @@ async function main() {
       shopId: shop.id,
       shopifyOrderGid: `gid://shopify/Order/phase6-wl-${Date.now()}`,
       orderNumber: `P6-${Math.floor(1000 + Math.random() * 9000)}`,
-      customerPhone: testPhoneWhitelisted, // Whitelisted!
       totalAmount: 3200,
       currency: 'PKR',
       status: 'Pending Confirmation',
       callStatus: 'pending',
       lineItemsSummary: 'Leather Jacket',
+      customer: {
+        create: {
+          shopId: shop.id,
+          phone: testPhoneWhitelisted,
+          firstName: 'Tariq',
+          lastName: 'Mehmood'
+        }
+      },
       payload: JSON.stringify({
         id: `9990002`,
         order_number: 9992,
