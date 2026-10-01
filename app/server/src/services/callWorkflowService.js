@@ -6,12 +6,13 @@ import { OrderStateMachine, OrderStatus } from './OrderStateMachine.js';
 import { AICallInterpretationService } from './aiCallInterpretationService.js';
 import { WhatsAppFallbackService } from './whatsappFallbackService.js';
 import { OrderEligibilityService } from './orderEligibilityService.js';
+import { CallScriptEngine } from './callScriptEngine.js';
 
 /**
  * End-to-End Call Workflow & Telephony Orchestration Service
  * 
  * Manages the complete lifecycle:
- * Eligible Order -> Queued -> Calling -> Status Callback / DTMF / AI Stream -> Interpretation -> State Transition -> Retry / WhatsApp Fallback
+ * Eligible Order -> Queued -> Whitelist & Safety Check -> Calling -> Status Callback / DTMF / AI Stream -> Interpretation -> State Transition -> Retry / WhatsApp Fallback
  */
 
 export class CallWorkflowService {
@@ -32,7 +33,8 @@ export class CallWorkflowService {
    * @param {string} params.orderId - Database Order UUID or order name
    * @param {string} params.shopDomain - Domain of the store
    * @param {boolean} [params.force=false] - If true, bypasses operating hour checks for manual merchant "Call Now"
-   * @returns {Promise<{ success: boolean, callId?: string, providerCallSid?: string, reason?: string }>}
+   * @param {boolean} [params.dryRun=false] - Explicit simulation flag
+   * @returns {Promise<{ success: boolean, callId?: string, providerCallSid?: string, reason?: string, dryRun?: boolean }>}
    */
   static async initiateCall({ orderId, shopDomain, force = false, dryRun = false }) {
     console.log(`📞 [CallWorkflow] Initiating call for order ${orderId} (Shop: ${shopDomain}, Force: ${force}, DryRun: ${dryRun})`);
@@ -51,9 +53,56 @@ export class CallWorkflowService {
       return { success: false, reason: 'UNAUTHORIZED_CROSS_TENANT_ACCESS' };
     }
 
-    // In-flight call lock check
+    // Safety 1: Emergency Stop Switch
+    let shopSettings = {};
+    if (shop.settings) {
+      try {
+        shopSettings = typeof shop.settings === 'string' ? JSON.parse(shop.settings) : shop.settings;
+      } catch (_) {}
+    }
+
+    const isEmergencyStop = process.env.EMERGENCY_STOP === 'true' || Boolean(shopSettings.emergencyStop);
+    if (isEmergencyStop) {
+      console.warn(`🚨 [CallWorkflow] EMERGENCY STOP ACTIVE! Outbound call blocked for order ${orderId}`);
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Emergency Stop Active',
+          detail: `Outbound call blocked for Order ${order.id} due to EMERGENCY_STOP switch`
+        }
+      });
+      return { success: false, reason: 'EMERGENCY_STOP_ACTIVE' };
+    }
+
+    // Safety 2: In-flight call lock check
     if (order.callStatus === 'calling' && !force) {
       return { success: false, reason: 'CALL_ALREADY_IN_PROGRESS' };
+    }
+
+    // Safety 3: Daily Call Quota Limit
+    const dailyLimit = Number(process.env.DAILY_CALL_LIMIT || 100);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const todayCallsCount = typeof prisma.call?.count === 'function'
+      ? await prisma.call.count({
+          where: {
+            shopId: shop.id,
+            createdAt: { gte: startOfToday }
+          }
+        })
+      : 0;
+
+    if (todayCallsCount >= dailyLimit && !force) {
+      console.warn(`🛑 [CallWorkflow] Daily call limit (${dailyLimit}) exceeded for shop ${shop.domain}`);
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Daily Call Limit Exceeded',
+          detail: `Outbound call blocked for Order ${order.id}. Daily quota reached (${todayCallsCount}/${dailyLimit})`
+        }
+      });
+      return { success: false, reason: 'DAILY_CALL_LIMIT_EXCEEDED' };
     }
 
     // Eligibility check
@@ -119,23 +168,44 @@ export class CallWorkflowService {
     const appUrl = (process.env.APP_URL || 'http://localhost:8787').replace(/\/$/, '');
     const fromNumber = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER;
 
-    const isDryRun = Boolean(
-      dryRun ||
-      process.env.DRY_RUN_CALLS === 'true' ||
-      !twilioClient ||
-      !fromNumber ||
-      !appUrl
+    // Phase 6 Mode & Whitelist Evaluation
+    const callMode = (process.env.AI_CALL_MODE || (process.env.DRY_RUN_CALLS === 'false' ? 'production' : 'test')).toLowerCase();
+    const adminTestNumbers = (process.env.ADMIN_TEST_NUMBERS || '')
+      .split(',')
+      .map(n => OrderEligibilityService.cleanPhoneNumber(n))
+      .filter(Boolean);
+
+    let isWhitelisted = false;
+    if (callMode === 'test') {
+      isWhitelisted = adminTestNumbers.includes(phone);
+      if (!isWhitelisted) {
+        console.log(`🛡️ [Whitelist Protection] Phone ${phone} is not in ADMIN_TEST_NUMBERS (${adminTestNumbers.join(', ') || 'None'}). Safely executing dry-run simulation.`);
+      } else {
+        console.log(`🎯 [Whitelist Approved] Phone ${phone} matches test whitelist. Proceeding with real carrier call.`);
+      }
+    } else if (callMode === 'production') {
+      isWhitelisted = true;
+    }
+
+    const shouldDialLiveCarrier = Boolean(
+      !dryRun &&
+      callMode !== 'dry_run' &&
+      process.env.DRY_RUN_CALLS !== 'true' &&
+      isWhitelisted &&
+      twilioClient &&
+      fromNumber &&
+      appUrl
     );
 
     let providerCallSid = null;
 
-    if (!isDryRun && twilioClient && fromNumber && appUrl) {
+    if (shouldDialLiveCarrier) {
       try {
-        // Voice URL serves TwiML (with both live Gemini streaming & keypad fallback)
-        const voiceUrl = `${appUrl}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
+        const orderNumber = order.orderNumber || (payload?.order_number ? String(payload.order_number) : order.id.slice(0, 6));
+        const voiceUrl = `${appUrl}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}&orderNumber=${encodeURIComponent(orderNumber)}`;
         const statusCallbackUrl = `${appUrl}/twilio/status?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&shop=${encodeURIComponent(shop.domain)}`;
 
-        console.log(`🔗 [CallWorkflow] Dialing Twilio from ${fromNumber} to ${phone}`);
+        console.log(`🔗 [CallWorkflow: LIVE] Dialing Twilio from ${fromNumber} to ${phone} (Mode: ${callMode})`);
         const call = await twilioClient.calls.create({
           to: phone,
           from: fromNumber,
@@ -146,9 +216,8 @@ export class CallWorkflowService {
         });
 
         providerCallSid = call.sid;
-        console.log(`✅ [CallWorkflow] Twilio call created: ${providerCallSid}`);
+        console.log(`✅ [CallWorkflow] Twilio live call created: ${providerCallSid}`);
 
-        // Update with provider SID
         await prisma.call.update({
           where: { id: callRecord.id },
           data: { providerCallSid }
@@ -159,9 +228,22 @@ export class CallWorkflowService {
           data: { callSid: providerCallSid }
         });
 
+        await prisma.complianceLog.create({
+          data: {
+            shopDomain: shop.domain,
+            event: 'Outbound Live Call Placed',
+            detail: `Live Twilio call placed for Order ${order.id} to ${phone} (SID: ${providerCallSid}, Mode: ${callMode})`
+          }
+        });
+
+        return {
+          success: true,
+          callId: callRecord.id,
+          providerCallSid,
+          liveCall: true
+        };
       } catch (twilioErr) {
         console.error(`❌ [CallWorkflow] Twilio API call error: ${twilioErr.message}`);
-        // If live carrier call fails, gracefully fallback
         await prisma.call.update({
           where: { id: callRecord.id },
           data: { outcome: 'Failed' }
@@ -179,7 +261,11 @@ export class CallWorkflowService {
       }
     } else {
       // Safe dry-run mode: Generate complete Twilio request and persist records without dialing external carrier
-      console.log(`ℹ️ [CallWorkflow] Running in safe dry-run mode (No external phone call placed)`);
+      const simulationReason = !isWhitelisted && callMode === 'test'
+        ? 'Safely simulated: number not in test whitelist'
+        : 'Dry-run mode active';
+
+      console.log(`ℹ️ [CallWorkflow: SIMULATION] ${simulationReason}`);
       providerCallSid = `dry_run_${crypto.randomUUID().substring(0, 12)}`;
 
       const voiceUrl = `${appUrl || 'http://localhost:8787'}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
@@ -206,7 +292,7 @@ export class CallWorkflowService {
         data: {
           shopDomain: shop.domain,
           event: 'Dry-run call simulated',
-          detail: `Dry-run request generated for Order ${order.id} to ${phone} (SID: ${providerCallSid})`
+          detail: `Simulated call for Order ${order.id} to ${phone} (SID: ${providerCallSid}, Reason: ${simulationReason})`
         }
       });
 
@@ -215,38 +301,14 @@ export class CallWorkflowService {
         callId: callRecord.id,
         providerCallSid,
         dryRun: true,
+        simulationReason,
         twilioPayload
       };
     }
-
-    await prisma.complianceLog.create({
-      data: {
-        shopDomain: shop.domain,
-        event: 'Outbound call placed',
-        detail: `Call placed for Order ${order.id} to ${phone} (SID: ${providerCallSid})`
-      }
-    });
-
-    return {
-      success: true,
-      callId: callRecord.id,
-      providerCallSid
-    };
   }
 
   /**
    * Handles call completion and customer decisions
-   * 
-   * @param {Object} params
-   * @param {string} params.orderId - Order UUID
-   * @param {string} params.shopDomain - Tenant Shop domain
-   * @param {string} [params.callId] - Call record UUID
-   * @param {string} [params.digits] - DTMF digits ('1' or '2')
-   * @param {string} [params.transcript] - Full dialogue transcript
-   * @param {string} [params.toolExecuted] - Direct AI tool called
-   * @param {string} [params.callStatus] - Twilio status
-   * @param {number} [params.durationSec] - Duration in seconds
-   * @param {string} [params.recordingUrl] - Audio recording URL
    */
   static async handleCallResult({
     orderId,
@@ -273,7 +335,7 @@ export class CallWorkflowService {
 
     const shop = order.shop;
 
-    // Interpret the outcome
+    // Interpret the outcome via AI interpretation service
     const decision = AICallInterpretationService.interpret({
       digits,
       transcript,
@@ -283,16 +345,22 @@ export class CallWorkflowService {
 
     console.log(`🧠 [CallWorkflow] Interpreted Decision:`, decision);
 
+    // Format full transcript with AI summary
+    const formattedTranscript = decision.summary
+      ? `[AI Summary]: ${decision.summary}\n[Confidence]: ${Math.round((decision.confidence || 0) * 100)}%\n\n${transcript || ''}`.trim()
+      : transcript || undefined;
+
     // Update Call record if provided
     if (callId) {
       await prisma.call.update({
         where: { id: callId },
         data: {
-          outcome: decision.result,
+          outcome: decision.intent || decision.result,
+          intent: decision.intent || 'Order Confirmation',
+          sentiment: decision.customerEmotion || 'Neutral',
           durationSec: durationSec || (decision.result === 'CONFIRMED' ? 45 : 10),
           recordingUrl: recordingUrl || undefined,
-          transcript: transcript || undefined,
-          sentiment: decision.result === 'CONFIRMED' ? 'Positive' : (['CANCELLED', 'REJECTED'].includes(decision.result) ? 'Negative' : 'Neutral')
+          transcript: formattedTranscript
         }
       }).catch(err => console.warn('Could not update call row:', err.message));
     }
@@ -311,7 +379,7 @@ export class CallWorkflowService {
     const enableWhatsAppFallback = settings.whatsapp?.enableFallback !== false;
 
     // 1. Order Confirmation
-    if (decision.result === 'CONFIRMED') {
+    if (decision.intent === 'CONFIRMED' || decision.result === 'CONFIRMED') {
       const stateMachine = new OrderStateMachine(order.id, shop.domain);
       await stateMachine.transition(OrderStatus.CONFIRMED);
 
@@ -331,11 +399,11 @@ export class CallWorkflowService {
         }
       });
 
-      return { success: true, outcome: 'CONFIRMED' };
+      return { success: true, outcome: 'CONFIRMED', decision };
     }
 
     // 2. Order Cancellation
-    if (decision.result === 'CANCELLED' || decision.result === 'REJECTED') {
+    if (decision.intent === 'CANCELLED' || decision.result === 'CANCELLED' || decision.result === 'REJECTED') {
       const stateMachine = new OrderStateMachine(order.id, shop.domain);
       await stateMachine.transition(OrderStatus.CANCELLED, 'Customer requested cancellation via call');
 
@@ -355,11 +423,35 @@ export class CallWorkflowService {
         }
       });
 
-      return { success: true, outcome: 'CANCELLED' };
+      return { success: true, outcome: 'CANCELLED', decision };
     }
 
-    // 3. Callback Requested
-    if (decision.result === 'CALLBACK_REQUESTED') {
+    // 3. Wrong Number / Not Placed By Customer
+    if (decision.intent === 'WRONG_NUMBER' || decision.result === 'WRONG_NUMBER') {
+      const stateMachine = new OrderStateMachine(order.id, shop.domain);
+      await stateMachine.transition(OrderStatus.CANCELLED, 'Wrong phone number reported on call');
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          callStatus: 'failed',
+          tag: 'Invalid Phone / Wrong Number'
+        }
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Wrong Number Reported',
+          detail: `Customer on call reported order ${order.id} was not placed by them`
+        }
+      });
+
+      return { success: true, outcome: 'WRONG_NUMBER', decision };
+    }
+
+    // 4. Callback Requested
+    if (decision.intent === 'CALL_BACK' || decision.result === 'CALLBACK_REQUESTED') {
       const delayMinutes = decision.callbackRequestedMinutes || 60;
       const delayMs = delayMinutes * 60 * 1000;
 
@@ -389,17 +481,16 @@ export class CallWorkflowService {
         }
       });
 
-      return { success: true, outcome: 'CALLBACK_REQUESTED' };
+      return { success: true, outcome: 'CALL_BACK', decision };
     }
 
-    // 4. No Answer / Busy / Telephony Failure -> Retry or WhatsApp Fallback
+    // 5. No Answer / Busy / Telephony Failure -> Retry or WhatsApp Fallback
     const isUnreachable = ['NO_ANSWER', 'BUSY', 'FAILED', 'UNKNOWN'].includes(decision.result);
     if (isUnreachable) {
       const currentRetryCount = order.retryCount || 0;
       const nextAttempt = currentRetryCount + 1;
 
       if (nextAttempt < maxAttempts) {
-        // Enqueue automated retry with exponential backoff delay
         const delayMs = retryDelayMinutes * 60 * 1000;
         console.log(`⏳ [CallWorkflow] Scheduling retry attempt ${nextAttempt + 1} for Order ${order.id} in ${retryDelayMinutes}m`);
 
@@ -422,7 +513,7 @@ export class CallWorkflowService {
           }
         });
 
-        return { success: true, outcome: 'RETRY_SCHEDULED', nextAttempt: nextAttempt + 1 };
+        return { success: true, outcome: 'RETRY_SCHEDULED', nextAttempt: nextAttempt + 1, decision };
       } else {
         // Retries exhausted! Trigger WhatsApp Fallback
         console.log(`🚨 [CallWorkflow] Max attempts (${maxAttempts}) reached for Order ${order.id}. Initiating WhatsApp fallback.`);
@@ -441,13 +532,15 @@ export class CallWorkflowService {
             orderId: order.id,
             shopId: shop.id
           });
-          return { success: true, outcome: 'WHATSAPP_FALLBACK_TRIGGERED', fallbackResult };
+          return { success: true, outcome: 'WHATSAPP_FALLBACK_TRIGGERED', fallbackResult, decision };
         }
 
-        return { success: true, outcome: 'CALL_FAILED_MAX_RETRIES' };
+        return { success: true, outcome: 'CALL_FAILED_MAX_RETRIES', decision };
       }
     }
 
-    return { success: true, outcome: decision.result };
+    return { success: true, outcome: decision.intent || decision.result, decision };
   }
 }
+
+export default CallWorkflowService;

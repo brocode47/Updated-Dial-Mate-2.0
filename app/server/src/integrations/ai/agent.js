@@ -16,12 +16,13 @@ export class Agent {
     this.onClose = options.onClose || (() => {});
     this.onToolExecuted = options.onToolExecuted || (() => {});
     
+    this.systemInstruction = options.systemInstruction || null;
     this.shopDomain = options.shopDomain || null;
     this.context = options.context || {};
   }
 
   async connect(initialContext = '') {
-    const systemInstruction = getPrompt(this.promptType) + '\n\n' + initialContext;
+    const systemInstruction = this.systemInstruction || (getPrompt(this.promptType) + '\n\n' + initialContext);
 
     this.session = await this.ai.live.connect({
       model: this.model,
@@ -42,6 +43,22 @@ export class Agent {
     });
     
     return this.session;
+  }
+
+  startConversation(text = 'The customer has answered the call. Please speak your opening greeting now.') {
+    if (!this.session) return;
+    try {
+      if (typeof this.session.sendClientContent === 'function') {
+        this.session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turnComplete: true
+        });
+      } else if (typeof this.session.sendRealtimeInput === 'function') {
+        this.session.sendRealtimeInput([{ text }]);
+      }
+    } catch (err) {
+      console.warn('⚠️ Could not send startConversation prompt to Gemini:', err.message);
+    }
   }
 
   sendAudio(pcm16Base64) {

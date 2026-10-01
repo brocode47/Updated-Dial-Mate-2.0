@@ -35,6 +35,7 @@ export function twilioRouter() {
     const customerName = clean(req.query.name, 'Customer');
     const productName = clean(req.query.product, 'your product');
     const productPrice = clean(req.query.price, '0');
+    const orderNumber = clean(req.query.orderNumber, '');
     const orderId = req.query.orderId || '';
     const callSid = req.body?.CallSid || req.query?.CallSid;
 
@@ -52,6 +53,7 @@ export function twilioRouter() {
     stream.parameter({ name: 'customerName', value: customerName });
     stream.parameter({ name: 'productName', value: productName });
     stream.parameter({ name: 'productPrice', value: productPrice });
+    stream.parameter({ name: 'orderNumber', value: orderNumber });
 
     // Optional initial message before connecting stream, but the stream itself is bidirectional.
     // Twilio will execute <Connect> and block.
@@ -101,10 +103,27 @@ export function twilioRouter() {
               return;
             }
 
+            const { CallScriptEngine } = await import('../services/callScriptEngine.js');
+            const shopName = order.shop.name || order.shop.domain.replace('.myshopify.com', '');
+            const customerName = params.customerName || (order.customerFirstName ? `${order.customerFirstName} ${order.customerLastName || ''}`.trim() : 'Customer');
+            const productName = params.productName || order.lineItemsSummary || 'Store Items';
+            const productPrice = params.productPrice || (order.totalPrice ? String(order.totalPrice) : '0');
+            const orderNumber = params.orderNumber || order.orderNumber || '';
+
+            const systemInstruction = CallScriptEngine.compileGeminiSystemInstruction({
+              agentName: 'Zara',
+              shopName,
+              customerName,
+              orderNumber,
+              productName,
+              productPrice
+            });
+
             const { Agent } = await import('../integrations/ai/agent.js');
             agent = new Agent({
               shopDomain: order.shop.domain,
-              context: { eventId: msg.start.streamSid }, // streamSid serves as a unique eventId for this active session
+              systemInstruction: systemInstruction,
+              context: { eventId: msg.start.streamSid, orderId: order.id }, // streamSid & orderId for tenant-isolated tool calls
               onAudioOut: (pcm16) => {
                 if (ws.readyState === 1 /* OPEN */) {
                   const ulawBase64 = codec.geminiToTwilio(pcm16);
@@ -154,8 +173,9 @@ export function twilioRouter() {
               }
             });
 
-            const initialContext = `Order ID: ${orderId}, Customer: ${params.customerName}, Product: ${params.productName}, Price: ${params.productPrice}`;
+            const initialContext = `Order ID: ${orderId}, Customer: ${customerName}, Product: ${productName}, Price: ${productPrice}`;
             await agent.connect(initialContext);
+            agent.startConversation(`The customer ${customerName} has answered the phone call. Please speak your opening greeting now in Roman Urdu according to Step 1.`);
             break;
 
           case 'media':

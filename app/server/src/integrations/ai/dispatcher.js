@@ -15,7 +15,7 @@ export const toolSchemas = {
   }),
   cancel_order: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
-    reason: z.enum(['customer', 'inventory', 'fraud', 'declined', 'other']).default('customer')
+    reason: z.string().optional().default('customer')
   }),
   add_order_tag: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
@@ -23,12 +23,12 @@ export const toolSchemas = {
   }),
   schedule_callback: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
-    reason: z.string(),
+    reason: z.string().optional().default('customer_busy'),
     delay_minutes: z.number().optional().default(15)
   }),
   request_human_transfer: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
-    reason: z.string()
+    reason: z.string().optional().default('human_requested')
   })
 };
 
@@ -42,8 +42,14 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
       return { success: false, error: `Tool ${toolName} not found or unsupported` };
     }
 
+    // Auto-inject orderId from active call context if missing
+    const mergedArgs = { ...(args || {}) };
+    if (!mergedArgs.orderId && context.orderId) {
+      mergedArgs.orderId = context.orderId;
+    }
+
     // Input validation
-    const validatedArgs = schema.parse(args);
+    const validatedArgs = schema.parse(mergedArgs);
     
     // Helper to get Shopify ID
     const getShopifyId = async (dbOrderId) => {
