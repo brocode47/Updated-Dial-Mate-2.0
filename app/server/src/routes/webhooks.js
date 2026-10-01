@@ -380,7 +380,7 @@ export async function triggerCall({ phone, customerName, productName, productPri
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const response = new VoiceResponse();
 
-    const gatherUrl = `${appUrl}/gather?orderId=${encodeURIComponent(orderId || '')}`;
+    const gatherUrl = `${appUrl}/twilio/gather?orderId=${encodeURIComponent(orderId || '')}`;
     const statusUrl = `${appUrl}/webhooks/call-status?orderId=${encodeURIComponent(orderId || '')}`;
 
     const gather = response.gather({

@@ -3,7 +3,7 @@ api.sundaybazaaar.com {
 }
 
 wa.sundaybazaaar.com {
-    reverse_proxy wa-akg:8787
+    reverse_proxy wa-akg:3000
 }
 
 app.sundaybazaaar.com {

@@ -258,7 +258,7 @@ export class CallWorkflowService {
           durationSec: durationSec || (decision.result === 'CONFIRMED' ? 45 : 10),
           recordingUrl: recordingUrl || undefined,
           transcript: transcript || undefined,
-          sentiment: decision.result === 'CONFIRMED' ? 'Positive' : (decision.result === 'REJECTED' ? 'Negative' : 'Neutral')
+          sentiment: decision.result === 'CONFIRMED' ? 'Positive' : (['CANCELLED', 'REJECTED'].includes(decision.result) ? 'Negative' : 'Neutral')
         }
       }).catch(err => console.warn('Could not update call row:', err.message));
     }
@@ -301,7 +301,7 @@ export class CallWorkflowService {
     }
 
     // 2. Order Cancellation
-    if (decision.result === 'REJECTED') {
+    if (decision.result === 'CANCELLED' || decision.result === 'REJECTED') {
       const stateMachine = new OrderStateMachine(order.id, shop.domain);
       await stateMachine.transition(OrderStatus.CANCELLED, 'Customer requested cancellation via call');
 
@@ -321,7 +321,7 @@ export class CallWorkflowService {
         }
       });
 
-      return { success: true, outcome: 'REJECTED' };
+      return { success: true, outcome: 'CANCELLED' };
     }
 
     // 3. Callback Requested

@@ -59,7 +59,7 @@ export class AICallInterpretationService {
     for (const pattern of rejectPatterns) {
       if (pattern.test(raw)) {
         return {
-          result: 'REJECTED',
+          result: 'CANCELLED',
           confidence: 0.98,
           language: detectedLanguage,
           reason: `Matched cancellation pattern: ${pattern.source}`,
@@ -136,6 +136,7 @@ export class AICallInterpretationService {
         return { result: 'NO_ANSWER', confidence: 1.0, isTerminalFailure: false };
       case 'failed':
       case 'canceled':
+      case 'cancelled':
         return { result: 'FAILED', confidence: 1.0, isTerminalFailure: true };
       default:
         return { result: 'UNKNOWN', confidence: 0.5, isTerminalFailure: false };
@@ -168,7 +169,7 @@ export class AICallInterpretationService {
 
     if (toolExecuted === 'cancel_order') {
       return {
-        result: 'REJECTED',
+        result: 'CANCELLED',
         confidence: 1.0,
         source: 'AI_TOOL_EXECUTION',
         reason: 'Customer requested order cancellation via conversational agent'
@@ -196,7 +197,7 @@ export class AICallInterpretationService {
 
     if (digits === '2') {
       return {
-        result: 'REJECTED',
+        result: 'CANCELLED',
         confidence: 1.0,
         source: 'DTMF_KEYPAD',
         reason: 'Customer pressed 2 on telephone keypad to cancel order'

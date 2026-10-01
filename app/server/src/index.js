@@ -61,6 +61,12 @@ app.use('/auth', authRouter());
 app.use('/api', apiRouter());
 app.use('/twilio', twilioRouter());
 
+// Forward any root /gather requests to /twilio/gather for robust backwards compatibility
+app.all('/gather', (req, res) => {
+  const queryStr = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  res.redirect(307, `/twilio/gather${queryStr}`);
+});
+
 // ===============================
 // INIT DB + START SERVER
 // ===============================

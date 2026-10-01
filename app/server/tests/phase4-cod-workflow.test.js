@@ -343,7 +343,7 @@ describe('Phase 4: Automated COD Confirmation Workflow Suite', () => {
         callDurationSec: 18
       });
 
-      expect(interpretation.result).toBe('REJECTED');
+      expect(interpretation.result).toBe('CANCELLED');
       expect(interpretation.confidence).toBeGreaterThan(0.85);
     });
 
@@ -366,13 +366,13 @@ describe('Phase 4: Automated COD Confirmation Workflow Suite', () => {
       expect(interpretation.confidence).toBe(1.0);
     });
 
-    it('interprets DTMF 2 as REJECTED', () => {
+    it('interprets DTMF 2 as CANCELLED', () => {
       const interpretation = aiCallInterpretationService.interpret({
         digits: '2',
         callDurationSec: 10
       });
 
-      expect(interpretation.result).toBe('REJECTED');
+      expect(interpretation.result).toBe('CANCELLED');
       expect(interpretation.confidence).toBe(1.0);
     });
 
