@@ -78,23 +78,26 @@ async function main() {
   }
   console.log(`Active Store: ${shop.domain} (ID: ${shop.id})`);
 
+  // Create a customer first
+  const customer1 = await prisma.customer.create({
+    data: {
+      shopId: shop.id,
+      phone: '+923000000001',
+      firstName: 'Asad',
+      lastName: 'Farooq'
+    }
+  });
+
   // Create a controlled test order
   const testOrderNonWhitelisted = await prisma.order.create({
     data: {
       shopId: shop.id,
+      customerId: customer1.id,
       shopifyOrderGid: `gid://shopify/Order/phase6-test-${Date.now()}`,
       orderNumber: `P6-${Math.floor(1000 + Math.random() * 9000)}`,
       totalAmount: 1850,
       status: 'Pending Confirmation',
       callStatus: 'pending',
-      customer: {
-        create: {
-          shopId: shop.id,
-          phone: '+923000000001',
-          firstName: 'Asad',
-          lastName: 'Farooq'
-        }
-      },
       payload: JSON.stringify({
         id: `9990001`,
         order_number: 9991,
@@ -139,22 +142,24 @@ async function main() {
   const testPhoneWhitelisted = '+923001234567';
   process.env.ADMIN_TEST_NUMBERS = `${testPhoneWhitelisted},+923331112233`;
 
+  const customer2 = await prisma.customer.create({
+    data: {
+      shopId: shop.id,
+      phone: testPhoneWhitelisted,
+      firstName: 'Tariq',
+      lastName: 'Mehmood'
+    }
+  });
+
   const testOrderWhitelisted = await prisma.order.create({
     data: {
       shopId: shop.id,
+      customerId: customer2.id,
       shopifyOrderGid: `gid://shopify/Order/phase6-wl-${Date.now()}`,
       orderNumber: `P6-${Math.floor(1000 + Math.random() * 9000)}`,
       totalAmount: 3200,
       status: 'Pending Confirmation',
       callStatus: 'pending',
-      customer: {
-        create: {
-          shopId: shop.id,
-          phone: testPhoneWhitelisted,
-          firstName: 'Tariq',
-          lastName: 'Mehmood'
-        }
-      },
       payload: JSON.stringify({
         id: `9990002`,
         order_number: 9992,
