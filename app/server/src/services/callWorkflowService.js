@@ -34,8 +34,8 @@ export class CallWorkflowService {
    * @param {boolean} [params.force=false] - If true, bypasses operating hour checks for manual merchant "Call Now"
    * @returns {Promise<{ success: boolean, callId?: string, providerCallSid?: string, reason?: string }>}
    */
-  static async initiateCall({ orderId, shopDomain, force = false }) {
-    console.log(`📞 [CallWorkflow] Initiating call for order ${orderId} (Shop: ${shopDomain}, Force: ${force})`);
+  static async initiateCall({ orderId, shopDomain, force = false, dryRun = false }) {
+    console.log(`📞 [CallWorkflow] Initiating call for order ${orderId} (Shop: ${shopDomain}, Force: ${force}, DryRun: ${dryRun})`);
 
     const order = await prisma.order.findUnique({
       where: { id: String(orderId) },
@@ -99,7 +99,7 @@ export class CallWorkflowService {
       data: {
         shopId: shop.id,
         orderId: order.id,
-        outcome: 'Calling',
+        outcome: 'Created',
         intent: 'Order Confirmation',
         sentiment: 'Neutral',
         durationSec: 0
@@ -119,9 +119,17 @@ export class CallWorkflowService {
     const appUrl = (process.env.APP_URL || 'http://localhost:8787').replace(/\/$/, '');
     const fromNumber = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER;
 
+    const isDryRun = Boolean(
+      dryRun ||
+      process.env.DRY_RUN_CALLS === 'true' ||
+      !twilioClient ||
+      !fromNumber ||
+      !appUrl
+    );
+
     let providerCallSid = null;
 
-    if (twilioClient && fromNumber && appUrl) {
+    if (!isDryRun && twilioClient && fromNumber && appUrl) {
       try {
         // Voice URL serves TwiML (with both live Gemini streaming & keypad fallback)
         const voiceUrl = `${appUrl}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
@@ -170,19 +178,45 @@ export class CallWorkflowService {
         };
       }
     } else {
-      // Mock / Dry-Run mode when Twilio credentials are not configured or in development
-      console.log(`ℹ️ [CallWorkflow] Running in dry-run mode (Twilio credentials unconfigured or local dev)`);
+      // Safe dry-run mode: Generate complete Twilio request and persist records without dialing external carrier
+      console.log(`ℹ️ [CallWorkflow] Running in safe dry-run mode (No external phone call placed)`);
       providerCallSid = `dry_run_${crypto.randomUUID().substring(0, 12)}`;
+
+      const voiceUrl = `${appUrl || 'http://localhost:8787'}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}`;
+      const statusCallbackUrl = `${appUrl || 'http://localhost:8787'}/twilio/status?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&shop=${encodeURIComponent(shop.domain)}`;
+
+      const twilioPayload = {
+        to: phone,
+        from: fromNumber || '+15550000000',
+        url: voiceUrl,
+        statusCallback: statusCallbackUrl
+      };
 
       await prisma.call.update({
         where: { id: callRecord.id },
-        data: { providerCallSid, outcome: 'Completed', durationSec: 35 }
+        data: { providerCallSid, outcome: 'Created', durationSec: 0 }
       });
 
       await prisma.order.update({
         where: { id: order.id },
-        data: { callSid: providerCallSid, callStatus: 'completed' }
+        data: { callSid: providerCallSid, callStatus: 'calling' }
       });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Dry-run call simulated',
+          detail: `Dry-run request generated for Order ${order.id} to ${phone} (SID: ${providerCallSid})`
+        }
+      });
+
+      return {
+        success: true,
+        callId: callRecord.id,
+        providerCallSid,
+        dryRun: true,
+        twilioPayload
+      };
     }
 
     await prisma.complianceLog.create({

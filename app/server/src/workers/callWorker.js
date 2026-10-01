@@ -32,7 +32,8 @@ export async function processCallJob(job) {
   const result = await CallWorkflowService.initiateCall({
     orderId,
     shopDomain: domain,
-    force: Boolean(force || job.name === 'retry-call' || job.name === 'callback')
+    force: Boolean(force || job.name === 'retry-call' || job.name === 'callback'),
+    dryRun: Boolean(job.data.dryRun)
   });
 
   return { success: result.success, orderId, result };
