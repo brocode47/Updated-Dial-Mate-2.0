@@ -87,7 +87,6 @@ async function main() {
       totalAmount: 1850,
       status: 'Pending Confirmation',
       callStatus: 'pending',
-      lineItemsSummary: 'Wireless Earbuds',
       customer: {
         create: {
           shopId: shop.id,
@@ -148,7 +147,6 @@ async function main() {
       totalAmount: 3200,
       status: 'Pending Confirmation',
       callStatus: 'pending',
-      lineItemsSummary: 'Leather Jacket',
       customer: {
         create: {
           shopId: shop.id,
