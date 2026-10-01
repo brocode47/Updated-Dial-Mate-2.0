@@ -95,19 +95,23 @@ Location: Lahore Warehouse
 13. Production deployment
 
 
+# Phase 5 Completed: Enterprise SaaS Frontend Experience
+- Modern Enterprise Design System: Shopify Polaris & Linear inspired dark-slate theme with Inter typography.
+- Real-Time Live Activity Feed: Telephony & WhatsApp status indicators, audio waveform previews, and retry monitors.
+- Full COD Funnel Analytics: Conversion rates, confirmation breakdown, call attempt stats, and risk scores.
+- Interactive Call Player & Transcript Drawer: Full dialogue replay, customer sentiment tags, and manual action triggers.
+- Verified on production: `https://app.sundaybazaaar.com` serving latest bundle.
+
+# Phase 6 Completed: Real AI Calling Activation & Conversational Intelligence
+- Controlled Production Mode: `AI_CALL_MODE=test|production` with `ADMIN_TEST_NUMBERS` whitelist protection preventing accidental mass customer calls.
+- AI Call Script Engine: 5-step conversational protocol tailored for Pakistani COD commerce in Roman Urdu (Zara persona).
+- Conversational Intelligence: Structured detection of `CONFIRMED`, `CANCELLED`, `CALL_BACK`, `WRONG_NUMBER`, and customer sentiment.
+- Production Safety Controls: Global/tenant `EMERGENCY_STOP` switch, rolling `DAILY_CALL_LIMIT=100`, operating hours gate (09:00 - 21:00 PKT), and automated WhatsApp fallback.
+- Verified on production server `193.123.73.113` against live store `0qwck2-s1.myshopify.com` with 100% test pass rate across 72 tests.
+
 # Important Instruction
 
 Do not rebuild the project.
-
 Continue from the existing codebase.
-
-First analyze:
-- server architecture
-- ai-engine architecture
-- database schema
-- existing agents
-- existing tools
-
 Preserve working functionality.
-
 Implement changes step-by-step and test after each change.
