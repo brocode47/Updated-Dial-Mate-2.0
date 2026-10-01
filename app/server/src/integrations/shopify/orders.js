@@ -64,19 +64,24 @@ export async function updateOrderNote(shopDomain, orderId, note) {
 }
 
 export async function addOrderTag(shopDomain, orderId, tag) {
-  const order = await fetchOrderDetails(shopDomain, orderId);
-  const existingTags = order.tags ? order.tags.split(',').map((t) => t.trim()) : [];
-  if (existingTags.includes(tag)) return order;
-  
-  existingTags.push(tag);
-  const response = await withRetry(shopDomain, (client) =>
-    client.put({
-      path: `orders/${orderId}`,
-      data: { order: { id: orderId, tags: existingTags.join(', ') } },
-      type: 'application/json',
-    })
-  );
-  return response.body.order;
+  try {
+    const order = await fetchOrderDetails(shopDomain, orderId);
+    const existingTags = order.tags ? order.tags.split(',').map((t) => t.trim()) : [];
+    if (existingTags.includes(tag)) return order;
+    
+    existingTags.push(tag);
+    const response = await withRetry(shopDomain, (client) =>
+      client.put({
+        path: `orders/${orderId}`,
+        data: { order: { id: orderId, tags: existingTags.join(', ') } },
+        type: 'application/json',
+      })
+    );
+    return response.body.order;
+  } catch (err) {
+    console.warn(`⚠️ [Shopify:addOrderTag] Notice for order ${orderId}: ${err.message}`);
+    return null;
+  }
 }
 
 export async function removeOrderTag(shopDomain, orderId, tag) {

@@ -21,7 +21,9 @@ export async function getShopifyClient(shopDomain) {
     throw new Error(`No access token available for ${shopDomain}`);
   }
 
-  const session = new shopify.session.customAppSession(shopDomain);
+  const session = typeof shopify.session?.customAppSession === 'function'
+    ? shopify.session.customAppSession(shopDomain)
+    : { shop: shopDomain, accessToken };
   session.accessToken = accessToken;
 
   // Returning a REST client

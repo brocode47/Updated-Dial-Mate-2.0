@@ -79,8 +79,7 @@ export class OrderStateMachine {
           await addOrderTag(order.shop.domain, shopifyOrderId, 'HUMAN_REVIEW_NEEDED');
         }
       } catch (err) {
-        console.error(`❌ Failed to sync status ${newStatus} to Shopify for order ${shopifyOrderId}:`, err.message);
-        throw err; // Bubble up
+        console.warn(`⚠️ Could not sync tag for ${newStatus} to Shopify (Order ${shopifyOrderId}):`, err.message);
       }
     }
 
