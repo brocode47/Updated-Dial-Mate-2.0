@@ -606,5 +606,73 @@ describe('AI Conversational Agent ("Zara") - Comprehensive Test Suite', () => {
       expect(transcript).toContain('Customer: Jee bilkul confirm hai.');
       expect(agent.getTurns()).toHaveLength(4);
     });
+
+    it('connects to live session passing callbacks and handles tool responses correctly', async () => {
+      let passedCallbacks = null;
+      let sentToolResponses = null;
+      let sentRealtimeInputs = [];
+
+      const mockSession = {
+        sendRealtimeInput: (payload) => sentRealtimeInputs.push(payload),
+        sendToolResponse: (payload) => { sentToolResponses = payload; },
+        close: vi.fn()
+      };
+
+      const mockAi = {
+        live: {
+          connect: vi.fn().mockImplementation(async (params) => {
+            passedCallbacks = params.callbacks;
+            return mockSession;
+          })
+        }
+      };
+
+      const executedTools = [];
+      const agent = new Agent({
+        ai: mockAi,
+        shopDomain: 'test.myshopify.com',
+        context: { orderId: 'ord-test-101' },
+        onToolExecuted: (name, res) => executedTools.push({ name, res })
+      });
+
+      await agent.connect('Initial Test Context');
+
+      expect(mockAi.live.connect).toHaveBeenCalled();
+      expect(passedCallbacks).toBeDefined();
+      expect(typeof passedCallbacks.onmessage).toBe('function');
+
+      // Test sendText and sendAudio
+      agent.sendText('Test message');
+      expect(sentRealtimeInputs).toContainEqual({ text: 'Test message' });
+
+      agent.sendAudio('fakeBase64Pcm');
+      expect(sentRealtimeInputs).toContainEqual({
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: 'fakeBase64Pcm'
+        }
+      });
+
+      // Test toolCall execution and response routing via sendToolResponse
+      await passedCallbacks.onmessage({
+        toolCall: {
+          functionCalls: [{
+            id: 'call_123',
+            name: 'confirm_order',
+            args: { orderId: 'ord-test-101' }
+          }]
+        }
+      });
+
+      expect(sentToolResponses).toBeDefined();
+      expect(sentToolResponses.functionResponses).toHaveLength(1);
+      expect(sentToolResponses.functionResponses[0].id).toBe('call_123');
+      expect(sentToolResponses.functionResponses[0].name).toBe('confirm_order');
+      expect(sentToolResponses.functionResponses[0].response).toBeDefined();
+
+      agent.close();
+      expect(mockSession.close).toHaveBeenCalled();
+    });
   });
 });
+

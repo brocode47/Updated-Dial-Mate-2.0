@@ -73,17 +73,35 @@ export class Agent {
         responseModalities: ['AUDIO'],
         inputAudioTranscription: {},
         outputAudioTranscription: {}
+      },
+      callbacks: {
+        onopen: () => {
+          // Connected callback
+        },
+        onmessage: async (msg) => {
+          if (msg.serverContent) this.handleContent(msg.serverContent);
+          if (msg.toolCall) await this.handleToolCall(msg.toolCall);
+        },
+        onerror: (err) => {
+          console.error('❌ Gemini Live error:', err);
+          this.onClose(err);
+        },
+        onclose: (e) => {
+          this.onClose(e);
+        }
       }
     });
     
-    // Wire up event listeners
-    this.session.on('content', (content) => this.handleContent(content));
-    this.session.on('toolCall', (toolCall) => this.handleToolCall(toolCall));
-    this.session.on('close', () => this.onClose());
-    this.session.on('error', (err) => {
-      console.error('❌ Gemini Live error:', err);
-      this.onClose(err);
-    });
+    // Wire up event listeners if session supports EventEmitter (e.g. in test mocks)
+    if (this.session && typeof this.session.on === 'function') {
+      this.session.on('content', (content) => this.handleContent(content));
+      this.session.on('toolCall', (toolCall) => this.handleToolCall(toolCall));
+      this.session.on('close', () => this.onClose());
+      this.session.on('error', (err) => {
+        console.error('❌ Gemini Live error:', err);
+        this.onClose(err);
+      });
+    }
     
     return this.session;
   }
@@ -91,13 +109,13 @@ export class Agent {
   startConversation(text = 'The customer has answered the call. Please speak your opening greeting now.') {
     if (!this.session) return;
     try {
-      if (typeof this.session.sendClientContent === 'function') {
+      if (typeof this.session.sendRealtimeInput === 'function') {
+        this.session.sendRealtimeInput({ text });
+      } else if (typeof this.session.sendClientContent === 'function') {
         this.session.sendClientContent({
           turns: [{ role: 'user', parts: [{ text }] }],
           turnComplete: true
         });
-      } else if (typeof this.session.sendRealtimeInput === 'function') {
-        this.session.sendRealtimeInput([{ text }]);
       }
     } catch (err) {
       console.warn('⚠️ Could not send startConversation prompt to Gemini:', err.message);
@@ -106,14 +124,31 @@ export class Agent {
 
   sendAudio(pcm16Base64) {
     if (!this.session || !pcm16Base64) return;
-    this.session.sendRealtimeInput([{
-      mimeType: 'audio/pcm;rate=16000',
-      data: pcm16Base64
-    }]);
+    try {
+      this.session.sendRealtimeInput({
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: pcm16Base64
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ Error sending audio to Gemini Live:', err.message);
+    }
+  }
+
+  sendText(text) {
+    if (!text) return;
+    this.recordTurn('user', text);
+    if (!this.session) return;
+    try {
+      this.session.sendRealtimeInput({ text });
+    } catch (err) {
+      console.warn('⚠️ Error sending text to Gemini Live:', err.message);
+    }
   }
 
   handleContent(response) {
-    const content = response?.serverContent;
+    const content = response?.serverContent || response;
     
     if (content?.interrupted) {
       this.onClear();
@@ -150,16 +185,16 @@ export class Agent {
     const functionCalls = toolCallEvent?.functionCalls || [];
     if (!functionCalls.length) return;
     
-    const toolResponses = [];
+    const functionResponses = [];
     
     for (const call of functionCalls) {
-      console.log(`🤖 Live Tool Dispatch [${call.name}] for shop [${this.shopDomain}]`);
+      console.log(`🤖 Live Tool Dispatch [${call.name}] for shop [${this.shopDomain}]`, call.args);
       try {
         const result = await dispatchToolCall(this.shopDomain, call.name, call.args, this.context);
-        toolResponses.push({
+        functionResponses.push({
           id: call.id, 
           name: call.name,
-          response: result
+          response: { output: result }
         });
         // Fire callback if it was successful
         if (result.success) {
@@ -167,7 +202,7 @@ export class Agent {
         }
       } catch (err) {
         console.error(`❌ Tool [${call.name}] failed:`, err.message);
-        toolResponses.push({
+        functionResponses.push({
           id: call.id,
           name: call.name,
           response: { error: err.message }
@@ -175,11 +210,13 @@ export class Agent {
       }
     }
     
-    if (toolResponses.length > 0 && this.session) {
+    if (functionResponses.length > 0 && this.session) {
       try {
-        this.session.sendRealtimeInput([{
-          toolResponses: toolResponses
-        }]);
+        if (typeof this.session.sendToolResponse === 'function') {
+          this.session.sendToolResponse({ functionResponses });
+        } else if (typeof this.session.sendRealtimeInput === 'function') {
+          this.session.sendRealtimeInput({ toolResponses: functionResponses });
+        }
       } catch(err) {
         console.error('❌ Failed to send tool response back to Gemini:', err);
       }

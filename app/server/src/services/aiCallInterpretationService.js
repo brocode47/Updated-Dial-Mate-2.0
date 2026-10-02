@@ -177,7 +177,8 @@ export class AICallInterpretationService {
     // 2. Callback requested patterns
     const callbackPatterns = [
       /\b(baad me|baad mein|busy hoon|busy hu|masroof|shaam ko|shaam me|kal call|phir call|thori der baad|after some time|call back|call later)\b/i,
-      /(بعد میں|مصروف ہوں|شام کو|کل کال کریں|دوبارہ کال)/i
+      /\b(driving|driving kar|baad call|ghante baad|ghanta baad|office mein)\b/i,
+      /(بعد میں|مصروف ہوں|شام کو|کل کال کریں|دوبارہ کال|ڈرائیونگ)/i
     ];
     for (const pattern of callbackPatterns) {
       if (pattern.test(raw) && !isNegatedCancellation) {
@@ -256,9 +257,12 @@ export class AICallInterpretationService {
     // 4. Confirmation patterns (ONLY if not negated and not hesitant!)
     if (!isNegatedConfirmation && !isHesitant) {
       const confirmPatterns = [
-        /\b(bhej do|bhejdein|bhej dein|confirm kar dein|confirm kardo|bhejo|sahi hai|ok hai|pakka bhej do|han bhej do|bilkul bhej do)\b/i,
+        /\b(bhej do|bhejdein|bhej dein|bhejo|bhejna hai|sahi hai|ok hai|pakka bhej do|han bhej do|bilkul bhej do)\b/i,
+        /\b(confirm\s*(kar\s*do|kardo|kar\s*dein|kardein|karein|karna|hai)?)\b/i,
+        /\b(order\s*(bhi\s*)?confirm(\s*hai|\s*kardo|\s*kar\s*do|\s*kar\s*dein)?)\b/i,
+        /\b(dispatch\s*(it|kardo|kar\s*do|kar\s*dein|karein)?|please\s*dispatch)\b/i,
         /\b(please deliver|go ahead|proceed|send it|please confirm|confirm my order|confirm the order|confirm order|yes please confirm|confirm it)\b/i,
-        /(جی بالکل|بھیج دیں|ٹھیک ہے|ہاں بھیج دیں|بھیجو)/i
+        /(جی بالکل|بھیج دیں|ٹھیک ہے|ہاں بھیج دیں|بھیجو|کنفرم ہے|آرڈر کنفرم)/i
       ];
 
       for (const pattern of confirmPatterns) {
