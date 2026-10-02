@@ -30,13 +30,12 @@ export function twilioRouter() {
   router.all('/voice', async (req, res) => {
     console.log('🎧 /twilio/voice HIT');
 
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-
-    const customerName = clean(req.query.name, 'Customer');
+    const VoiceResponse = twilio.twiml.VoiceResponse;    const customerName = clean(req.query.name, 'Customer');
     const productName = clean(req.query.product, 'your product');
     const productPrice = clean(req.query.price, '0');
     const orderNumber = clean(req.query.orderNumber, '');
     const orderId = req.query.orderId || '';
+    const callId = req.query.callId || req.body?.callId || '';
     const callSid = req.body?.CallSid || req.query?.CallSid;
 
     const host = req.headers.host;
@@ -48,6 +47,7 @@ export function twilioRouter() {
     const connect = response.connect();
     const stream = connect.stream({ url: wsUrl });
     stream.parameter({ name: 'orderId', value: orderId });
+    stream.parameter({ name: 'callId', value: callId });
     stream.parameter({ name: 'callSid', value: callSid });
     stream.parameter({ name: 'token', value: generateWSToken(orderId, callSid) });
     stream.parameter({ name: 'customerName', value: customerName });
@@ -69,8 +69,28 @@ export function twilioRouter() {
     let streamSid = null;
     let callSid = null;
     let orderId = null;
+    let callId = null;
     let agent = null;
     let codec = new AudioCodec();
+    let terminalToolExecuted = null;
+    let gracefulHangupTimer = null;
+
+    const clearHangupTimer = () => {
+      if (gracefulHangupTimer) {
+        clearTimeout(gracefulHangupTimer);
+        gracefulHangupTimer = null;
+      }
+    };
+
+    const scheduleGracefulHangup = (delayMs = 8000) => {
+      clearHangupTimer();
+      gracefulHangupTimer = setTimeout(() => {
+        if (ws.readyState === 1 /* OPEN */) {
+          console.log('⏳ Graceful hangup timer expired after terminal action.');
+          ws.close();
+        }
+      }, delayMs);
+    };
 
     ws.on('message', async (message) => {
       try {
@@ -86,6 +106,7 @@ export function twilioRouter() {
             const params = msg.start.customParameters || {};
 
             orderId = params.orderId;
+            callId = params.callId || null;
             callSid = params.callSid;
 
             if (!verifyWSToken(orderId, callSid, params.token)) {
@@ -94,9 +115,12 @@ export function twilioRouter() {
               return;
             }
 
-            console.log(`🚀 Starting Live Session for Order: ${orderId}`);
+            console.log(`🚀 Starting Live Session for Order: ${orderId} (CallId: ${callId})`);
 
-            const order = await prisma.order.findUnique({ where: { id: orderId }, include: { shop: true } });
+            const order = await prisma.order.findUnique({
+              where: { id: orderId },
+              include: { shop: true, customer: true }
+            });
             if (!order) {
               console.error('❌ Order not found');
               ws.close();
@@ -110,13 +134,64 @@ export function twilioRouter() {
             const productPrice = params.productPrice || (order.totalPrice ? String(order.totalPrice) : '0');
             const orderNumber = params.orderNumber || order.orderNumber || '';
 
+            // Extract rich factual data for grounding
+            let lineItems = [];
+            let shippingAddress = null;
+            let subtotalPrice = null;
+            let shippingPrice = null;
+
+            if (order.payload) {
+              try {
+                const parsed = typeof order.payload === 'string' ? JSON.parse(order.payload) : order.payload;
+                if (Array.isArray(parsed.line_items) && parsed.line_items.length > 0) {
+                  lineItems = parsed.line_items.map(item => ({
+                    title: item.title || item.name,
+                    variantTitle: item.variant_title || '',
+                    quantity: item.quantity || 1,
+                    price: item.price ? String(item.price) : ''
+                  }));
+                }
+                if (parsed.shipping_address) {
+                  shippingAddress = [
+                    parsed.shipping_address.address1,
+                    parsed.shipping_address.address2,
+                    parsed.shipping_address.city,
+                    parsed.shipping_address.province,
+                    parsed.shipping_address.zip
+                  ].filter(Boolean).join(', ');
+                }
+                if (parsed.subtotal_price) subtotalPrice = String(parsed.subtotal_price);
+                if (parsed.total_shipping_price_set?.shop_money?.amount || parsed.shipping_lines?.[0]?.price) {
+                  shippingPrice = String(parsed.total_shipping_price_set?.shop_money?.amount || parsed.shipping_lines?.[0]?.price);
+                }
+              } catch (e) {
+                console.warn('Could not parse order payload for context:', e.message);
+              }
+            }
+
+            let shopSettings = {};
+            if (order.shop?.settings) {
+              try {
+                shopSettings = typeof order.shop.settings === 'string' ? JSON.parse(order.shop.settings) : order.shop.settings;
+              } catch (_) {}
+            }
+
             const systemInstruction = CallScriptEngine.compileGeminiSystemInstruction({
               agentName: 'Zara',
               shopName,
               customerName,
               orderNumber,
               productName,
-              productPrice
+              productPrice,
+              lineItems: lineItems.length ? lineItems : [{ title: productName, quantity: 1, price: productPrice }],
+              shippingAddress: shippingAddress || (order.customer ? [order.customer.city, order.customer.address].filter(Boolean).join(', ') : null),
+              subtotalPrice: subtotalPrice || productPrice,
+              shippingPrice: shippingPrice || '0',
+              totalPrice: productPrice,
+              paymentMethod: 'Cash on Delivery (COD)',
+              deliverySLA: shopSettings.deliverySLA || '3 to 5 working days',
+              openParcelPolicy: shopSettings.allowOpenParcel ? 'Allowed to inspect parcel before paying' : 'Courier policy does not permit opening parcel before payment',
+              returnPolicy: shopSettings.returnPolicy || '7-day easy exchange/return policy for damaged or defective items'
             });
 
             const { Agent } = await import('../integrations/ai/agent.js');
@@ -137,12 +212,26 @@ export function twilioRouter() {
                 }
               },
               onClear: () => {
+                // Interruption / barge-in triggered:
+                // 1. Reset codec resampler buffers to eliminate stale audio
+                codec.reset();
+                // 2. Inform Twilio to clear its queued audio buffer
                 if (ws.readyState === 1 /* OPEN */) {
                   ws.send(JSON.stringify({ event: 'clear', streamSid: streamSid }));
+                }
+                // 3. If customer barges in, cancel pending hangup timer
+                clearHangupTimer();
+              },
+              onTurnComplete: () => {
+                // If a terminal action took place and Zara finished speaking the farewell/acknowledgement,
+                // schedule graceful hangup allowing customer an 8s window to ask a follow-up or say goodbye.
+                if (terminalToolExecuted) {
+                  scheduleGracefulHangup(8000);
                 }
               },
               onClose: async (err) => {
                 console.log('🛑 Gemini Session Closed', err ? err.message : '');
+                clearHangupTimer();
                 try {
                   const finalOrder = await prisma.order.findUnique({ where: { id: orderId } });
                   if (finalOrder && finalOrder.status === 'Human Transfer') {
@@ -162,26 +251,26 @@ export function twilioRouter() {
                 }
               },
               onToolExecuted: (toolName, result) => {
-                // If a terminal action occurred, allow Gemini a few seconds to speak, then hang up
-                if (['request_human_transfer', 'confirm_order', 'cancel_order'].includes(toolName)) {
-                  setTimeout(() => {
-                    if (ws.readyState === 1 /* OPEN */) {
-                      ws.close();
-                    }
-                  }, 4000); // 4 seconds for goodbye message
+                console.log(`🔧 Tool executed in active call: ${toolName}`, result);
+                if (['request_human_transfer', 'confirm_order', 'cancel_order', 'schedule_callback'].includes(toolName)) {
+                  terminalToolExecuted = toolName;
+                  // Fallback safety hangup after 15s if turnComplete is delayed
+                  scheduleGracefulHangup(15000);
                 }
               }
             });
 
             const initialContext = `Order ID: ${orderId}, Customer: ${customerName}, Product: ${productName}, Price: ${productPrice}`;
             await agent.connect(initialContext);
-            agent.startConversation(`The customer ${customerName} has answered the phone call. Please speak your opening greeting now in Roman Urdu according to Step 1.`);
+            agent.startConversation(`The customer ${customerName} has answered the phone call. Please speak your opening greeting naturally in Roman Urdu as Zara from ${shopName}.`);
             break;
 
           case 'media':
             if (agent) {
               const pcm16 = codec.twilioToGemini(msg.media.payload);
               if (pcm16) {
+                // Customer is speaking: clear any pending hangup timer
+                clearHangupTimer();
                 agent.sendAudio(pcm16);
               }
             }
@@ -189,6 +278,7 @@ export function twilioRouter() {
 
           case 'stop':
             console.log('🛑 Twilio Media Stream Stopped');
+            clearHangupTimer();
             if (agent) agent.close();
             break;
         }
@@ -197,9 +287,24 @@ export function twilioRouter() {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', async () => {
       console.log('🔌 Twilio Media WebSocket Disconnected');
-      if (agent) agent.close();
+      clearHangupTimer();
+      if (agent) {
+        try {
+          const finalTranscript = agent.getFormattedTranscript?.() || '';
+          if (finalTranscript && callId) {
+            await prisma.call.update({
+              where: { id: callId },
+              data: { transcript: finalTranscript }
+            });
+            console.log(`📝 Live Gemini transcript saved to Call ${callId} (${finalTranscript.length} chars)`);
+          }
+        } catch (e) {
+          console.warn('Could not persist final transcript on ws close:', e.message);
+        }
+        agent.close();
+      }
     });
   });
 
@@ -255,6 +360,12 @@ export function twilioRouter() {
         });
 
         if (order && order.shop) {
+          let callTranscript = null;
+          if (callId) {
+            const callRecord = await prisma.call.findUnique({ where: { id: callId } });
+            callTranscript = callRecord?.transcript;
+          }
+
           const { CallWorkflowService } = await import('../services/callWorkflowService.js');
           await CallWorkflowService.handleCallResult({
             orderId: order.id,
@@ -262,7 +373,8 @@ export function twilioRouter() {
             callId,
             callStatus,
             durationSec,
-            recordingUrl
+            recordingUrl,
+            transcript: callTranscript || undefined
           });
         }
       }

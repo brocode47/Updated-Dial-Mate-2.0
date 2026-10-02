@@ -8,11 +8,19 @@ import { stream } from '@audio/resample-polyphase';
  */
 export class AudioCodec {
   constructor() {
+    this.reset();
+  }
+
+  /**
+   * Resets the resamplers to flush any pending internal buffers during interruption/barge-in.
+   */
+  reset() {
     // 8kHz (Twilio) -> 16kHz (Gemini)
     this.inboundResampler = stream({ from: 8000, to: 16000 });
     // 24kHz (Gemini) -> 8kHz (Twilio)
     this.outboundResampler = stream({ from: 24000, to: 8000 });
   }
+
 
   /**
    * Converts Twilio μ-law base64 chunk to Gemini PCM16 base64 chunk.

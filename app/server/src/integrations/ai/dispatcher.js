@@ -15,7 +15,7 @@ export const toolSchemas = {
   }),
   cancel_order: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
-    reason: z.string().optional().default('customer')
+    reason: z.string().optional().default('customer_requested')
   }),
   add_order_tag: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
@@ -24,7 +24,27 @@ export const toolSchemas = {
   schedule_callback: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
     reason: z.string().optional().default('customer_busy'),
-    delay_minutes: z.number().optional().default(15)
+    delay_minutes: z.union([z.number(), z.string()]).optional().transform((val) => {
+      if (typeof val === 'string') {
+        const parsed = parseInt(val, 10);
+        return isNaN(parsed) ? null : parsed;
+      }
+      return val ?? null;
+    }),
+    requestedTime: z.string().optional()
+  }).transform((data) => {
+    let finalMinutes = data.delay_minutes;
+    if (!finalMinutes && data.requestedTime) {
+      const lower = data.requestedTime.toLowerCase();
+      if (/kal|tomorrow/i.test(lower)) finalMinutes = 1440;
+      else if (/shaam|evening/i.test(lower)) finalMinutes = 180;
+      else if (/30/i.test(lower)) finalMinutes = 30;
+      else if (/hour|ghanta/i.test(lower)) finalMinutes = 60;
+    }
+    return {
+      ...data,
+      delay_minutes: finalMinutes || 15
+    };
   }),
   request_human_transfer: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
@@ -65,10 +85,60 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
     
     switch (toolName) {
       case 'get_order': {
-        const sId = await getShopifyId(validatedArgs.orderId);
-        const order = await ordersApi.fetchOrderDetails(shopDomain, sId);
-        return { success: true, data: order };
+        const order = await prisma.order.findUnique({
+          where: { id: validatedArgs.orderId },
+          include: { shop: true, customer: true }
+        });
+        if (!order) throw new Error(`Order ${validatedArgs.orderId} not found in DB`);
+        if (order.shop.domain !== shopDomain) throw new Error('Unauthorized cross-tenant access');
+
+        let parsedPayload = {};
+        try { parsedPayload = JSON.parse(order.payload || '{}'); } catch (_) {}
+
+        try {
+          const sId = await getShopifyId(validatedArgs.orderId);
+          const shopifyDetails = await ordersApi.fetchOrderDetails(shopDomain, sId);
+          return { success: true, data: shopifyDetails };
+        } catch (shopifyErr) {
+          // Fallback to rich database record and payload
+          let lineItems = [];
+          if (Array.isArray(parsedPayload.line_items)) {
+            lineItems = parsedPayload.line_items.map(i => ({
+              title: i.title || i.name,
+              variantTitle: i.variant_title || '',
+              quantity: i.quantity || 1,
+              price: i.price ? String(i.price) : ''
+            }));
+          }
+          let shippingAddress = null;
+          if (parsedPayload.shipping_address) {
+            shippingAddress = [
+              parsedPayload.shipping_address.address1,
+              parsedPayload.shipping_address.address2,
+              parsedPayload.shipping_address.city
+            ].filter(Boolean).join(', ');
+          }
+
+          return {
+            success: true,
+            orderNumber: order.orderNumber,
+            totalPrice: order.totalPrice || order.totalAmount,
+            lineItems,
+            shippingAddress,
+            data: {
+              orderNumber: order.orderNumber,
+              totalAmount: order.totalAmount,
+              status: order.status,
+              line_items: parsedPayload.line_items || [],
+              shipping_address: parsedPayload.shipping_address || null,
+              customerName: order.customer ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() : 'Customer',
+              courierName: order.courierName,
+              expectedDelivery: order.expectedDelivery
+            }
+          };
+        }
       }
+
       case 'get_customer': {
         const customer = await ordersApi.fetchCustomerDetails(shopDomain, validatedArgs.customerId);
         return { success: true, data: customer };
@@ -109,11 +179,6 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
         const delay_minutes = validatedArgs.delay_minutes || 15;
         const delayMs = delay_minutes * 60 * 1000;
         
-        // Idempotency Design:
-        // Use an explicit event identity (`context.eventId`) provided by the application boundary (e.g. Twilio webhook signature).
-        // Include the requested schedule (delay_minutes) so multiple differing callbacks in the same event don't collide.
-        // If the exact same callback event is retried (same API request), it uses the SAME eventId -> deduplicated by BullMQ.
-        // Legitimate new callbacks from the same or later conversations will have a NEW eventId -> successfully scheduled.
         const eventId = context.eventId;
         if (!eventId) throw new Error('Callback scheduling requires an explicit event identity for deduplication');
         
@@ -134,12 +199,23 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
           jobId
         });
         
-        return { success: true, data: { scheduled: true, jobId: job.id, delayMs } };
+        return {
+          success: true,
+          scheduled: true,
+          delayMinutes: delay_minutes,
+          reason: validatedArgs.reason,
+          data: { scheduled: true, jobId: job?.id || jobId, delayMs }
+        };
       }
       case 'request_human_transfer': {
         const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
         const updated = await stateMachine.transition(OrderStatus.HUMAN_REQUIRED, validatedArgs.reason);
-        return { success: true, data: updated };
+        return {
+          success: true,
+          transferred: true,
+          reason: validatedArgs.reason,
+          data: updated
+        };
       }
       default:
         return { success: false, error: 'Unknown tool' };
@@ -149,3 +225,10 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
     return { success: false, error: error.message };
   }
 }
+
+export const ToolDispatcher = {
+  dispatch: (toolName, args, context = {}) => {
+    const shopDomain = context.shopDomain || 'test.myshopify.com';
+    return dispatchToolCall(shopDomain, toolName, args, context);
+  }
+};

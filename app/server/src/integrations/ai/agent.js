@@ -5,7 +5,7 @@ import { dispatchToolCall } from './dispatcher.js';
 
 export class Agent {
   constructor(options = {}) {
-    this.ai = getAIClient();
+    this.ai = options.ai || (process.env.GEMINI_API_KEY ? getAIClient() : null);
     this.model = options.model || 'gemini-3.1-flash-live-preview';
     this.promptType = options.promptType || 'orderConfirmation';
     this.tools = options.tools || Object.values(AITools);
@@ -15,13 +15,54 @@ export class Agent {
     this.onClear = options.onClear || (() => {});
     this.onClose = options.onClose || (() => {});
     this.onToolExecuted = options.onToolExecuted || (() => {});
+    this.onTurnComplete = options.onTurnComplete || (() => {});
+    this.onTranscriptUpdate = options.onTranscriptUpdate || (() => {});
     
     this.systemInstruction = options.systemInstruction || null;
     this.shopDomain = options.shopDomain || null;
     this.context = options.context || {};
+    
+    // Conversation turns memory
+    this.transcript = [];
+  }
+
+  recordTurn(role, text) {
+    if (!text || !text.trim()) return;
+    const cleanText = text.trim();
+    const lastTurn = this.transcript[this.transcript.length - 1];
+    
+    if (lastTurn && lastTurn.role === role) {
+      if (lastTurn.text === cleanText) return;
+      if (cleanText.startsWith(lastTurn.text)) {
+        lastTurn.text = cleanText;
+      } else {
+        lastTurn.text += ` ${cleanText}`;
+      }
+    } else {
+      this.transcript.push({ role, text: cleanText, timestamp: new Date() });
+    }
+
+    this.onTranscriptUpdate(this.getFormattedTranscript());
+  }
+
+  getFormattedTranscript() {
+    return this.transcript
+      .map(t => `${t.role === 'assistant' ? 'Zara' : 'Customer'}: ${t.text}`)
+      .join('\n');
+  }
+
+  getTranscript() {
+    return [...this.transcript];
+  }
+
+  getTurns() {
+    return [...this.transcript];
   }
 
   async connect(initialContext = '') {
+    if (!this.ai) {
+      this.ai = getAIClient();
+    }
     const systemInstruction = this.systemInstruction || (getPrompt(this.promptType) + '\n\n' + initialContext);
 
     this.session = await this.ai.live.connect({
@@ -29,7 +70,9 @@ export class Agent {
       config: {
         systemInstruction: { parts: [{ text: systemInstruction }] },
         tools: [{ functionDeclarations: this.tools }],
-        responseModalities: ['AUDIO']
+        responseModalities: ['AUDIO'],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}
       }
     });
     
@@ -76,13 +119,30 @@ export class Agent {
       this.onClear();
     }
     
+    // Model output audio and text parts
     if (content?.modelTurn?.parts) {
       for (const part of content.modelTurn.parts) {
         if (part.inlineData) {
           // Output audio base64 payload
           this.onAudioOut(part.inlineData.data);
         }
+        if (part.text) {
+          this.recordTurn('assistant', part.text);
+        }
       }
+    }
+
+    // Capture transcription events from Gemini Live
+    if (content?.inputTranscription?.text) {
+      this.recordTurn('user', content.inputTranscription.text);
+    }
+    if (content?.outputTranscription?.text) {
+      this.recordTurn('assistant', content.outputTranscription.text);
+    }
+
+    // Turn complete
+    if (content?.turnComplete) {
+      this.onTurnComplete();
     }
   }
 
@@ -132,3 +192,4 @@ export class Agent {
     }
   }
 }
+

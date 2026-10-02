@@ -102,34 +102,85 @@ export class AICallInterpretationService {
       }
     }
 
-    // 2. Rejection / Cancellation patterns
-    const rejectPatterns = [
-      /\b(cancel|cancel kar do|cancel kardo|nahi chahiye|nh chahiye|mat bhejo|nhi chahiye|mat bhein|mana kar diya|galti se|order cancel)\b/i,
-      /\b(do not send|dont send|cancel order|decline)\b/i,
-      /(منسوخ|کینسل|نہیں چاہیے|مت بھیجو|کینسل کر دیں|کینسل کردیں)/i
+    // --- CONTEXTUAL NEGATION DETECTION (CRITICAL SAFETY GUARD) ---
+    const negatedCancellationPatterns = [
+      /\b(cancel\s*(karne\s*ko\s*|karne\s*ka\s*|karna\s*|ka\s*)?(nahi|nhi|nh|nahin|mat|na)\s*(karna|karo|karein|keh|kaha)?)\b/i,
+      /\b((nahi|nhi|nh|nahin|mat|na)\s*cancel\b)/i,
+      /\b(main\s+cancel\s+nahi\s+karna\s+chahta)\b/i,
+      /\b(cancel\s+ka\s+nahi\s+kaha)\b/i,
+      /\b(maine\s+cancel\s+(karne\s+ko\s+)?nahi\s+kaha)\b/i,
+      /\b(order\s+cancel\s+nahi)\b/i,
+      /\b(do\s*not\s+cancel|dont\s+cancel)\b/i,
+      /(کینسل\s+نہیں|کینسل\s+مت|کینسل\s+کا\s+نہیں)/i
     ];
-    for (const pattern of rejectPatterns) {
+
+    const negatedConfirmationPatterns = [
+      /\b(confirm\s*(nahi|nhi|nh|nahin|mat|na)\s*(karna|karo|karein|keh|kaha)?)\b/i,
+      /\b((nahi|nhi|nh|nahin|mat|na)\s*confirm\b)/i,
+      /\b(main\s+confirm\s+nahi\s+karta)\b/i,
+      /\b(abhi\s+confirm\s+nahi\s+kar\s+sakta)\b/i,
+      /\b(confirm\s+ka\s+nahi\s+kaha)\b/i,
+      /\b(order\s+confirm\s+nahi)\b/i,
+      /\b(do\s*not\s+confirm|dont\s+confirm)\b/i,
+      /(کنفرم\s+نہیں|کنفرم\s+مت|کنفرم\s+کا\s+نہیں)/i
+    ];
+
+    const isNegatedCancellation = negatedCancellationPatterns.some(p => p.test(raw));
+    const isNegatedConfirmation = negatedConfirmationPatterns.some(p => p.test(raw));
+
+    // Hesitant / Uncertain markers (must never confirm or cancel automatically)
+    const hesitantPatterns = [
+      /\b(shayad|pata nahi|dekh kar|soch kar|sochta hoon|sochti hoon|not sure|confused|maybe|abhi nahi pata|baad me bataunga)\b/i
+    ];
+    const isHesitant = hesitantPatterns.some(p => p.test(raw));
+
+    // Human transfer requests
+    const humanTransferPatterns = [
+      /\b(human agent|human representative|manager|agent se baat|insan se baat|representative|baat karwa do|baat karwa dein|kisi aur se baat)\b/i,
+      /(نمائندے سے بات|انسان سے بات|منیجر)/i
+    ];
+    for (const pattern of humanTransferPatterns) {
       if (pattern.test(raw)) {
         return {
-          intent: 'CANCELLED',
-          result: 'CANCELLED',
-          confidence: 0.98,
+          intent: 'HUMAN_TRANSFER',
+          result: 'HUMAN_TRANSFER',
+          confidence: 0.95,
           language: detectedLanguage,
-          summary: 'Customer explicitly requested cancellation of the order',
+          summary: 'Customer requested transfer to a human representative or manager',
           customerEmotion,
-          reason: `Matched cancellation pattern: ${pattern.source}`,
+          reason: `Matched human transfer pattern: ${pattern.source}`,
           callbackRequestedMinutes: null
         };
       }
     }
 
-    // 3. Callback requested patterns
+    // Do-not-call requests
+    const doNotCallPatterns = [
+      /\b(dobara call mat|dubara call mat|kabhi call mat|dont call again|do not call again|remove my number|number delete|blacklist)\b/i,
+      /(دوبارہ کال مت کرنا|کبھی کال مت کرنا)/i
+    ];
+    for (const pattern of doNotCallPatterns) {
+      if (pattern.test(raw)) {
+        return {
+          intent: 'DO_NOT_CALL',
+          result: 'DO_NOT_CALL',
+          confidence: 0.98,
+          language: detectedLanguage,
+          summary: 'Customer explicitly requested not to be called again',
+          customerEmotion: 'Upset',
+          reason: `Matched do-not-call pattern: ${pattern.source}`,
+          callbackRequestedMinutes: null
+        };
+      }
+    }
+
+    // 2. Callback requested patterns
     const callbackPatterns = [
       /\b(baad me|baad mein|busy hoon|busy hu|masroof|shaam ko|shaam me|kal call|phir call|thori der baad|after some time|call back|call later)\b/i,
       /(بعد میں|مصروف ہوں|شام کو|کل کال کریں|دوبارہ کال)/i
     ];
     for (const pattern of callbackPatterns) {
-      if (pattern.test(raw)) {
+      if (pattern.test(raw) && !isNegatedCancellation) {
         let delayMinutes = 60; // Default 1 hour
         if (/\b(shaam|evening)\b/i.test(raw)) delayMinutes = 180;
         if (/\b(kal|tomorrow)\b/i.test(raw)) delayMinutes = 1440;
@@ -148,38 +199,117 @@ export class AICallInterpretationService {
       }
     }
 
-    // 4. Confirmation patterns
-    const confirmPatterns = [
-      /\b(jee|ji|haan|bhej do|bhejdein|bhej dein|theek hai|confirm|bhejo|sahi hai|ok hai|pakka bhej do|han bhej do)\b/i,
-      /\b(yes|confirm|confirmed|send it|please deliver|go ahead|proceed)\b/i,
-      /(جی بالکل|کنفرم|بھیج دیں|ٹھیک ہے|ہاں بھیج دیں|بھیجو)/i
-    ];
-    for (const pattern of confirmPatterns) {
-      if (pattern.test(raw)) {
+    // 3. Rejection / Cancellation patterns (ONLY if not negated!)
+    if (!isNegatedCancellation) {
+      const rejectPatterns = [
+        /\b(cancel kar do|cancel kardo|nahi chahiye|nh chahiye|mat bhejo|nhi chahiye|mat bhein|mana kar diya|galti se|order cancel|cancel order|decline)\b/i,
+        /\b(do not send|dont send)\b/i,
+        /(منسوخ|نہیں چاہیے|مت بھیجو|کینسل کر دیں|کینسل کردیں)/i
+      ];
+      // Standalone cancel (not part of "cancel nahi")
+      const standaloneCancel = /\bcancel\b/i.test(raw);
+
+      for (const pattern of rejectPatterns) {
+        if (pattern.test(raw)) {
+          return {
+            intent: 'CANCELLED',
+            result: 'CANCELLED',
+            confidence: 0.98,
+            language: detectedLanguage,
+            summary: 'Customer explicitly requested cancellation of the order',
+            customerEmotion,
+            reason: `Matched cancellation pattern: ${pattern.source}`,
+            callbackRequestedMinutes: null
+          };
+        }
+      }
+
+      if (standaloneCancel && !isHesitant) {
         return {
-          intent: 'CONFIRMED',
-          result: 'CONFIRMED',
-          confidence: 0.96,
+          intent: 'CANCELLED',
+          result: 'CANCELLED',
+          confidence: 0.95,
           language: detectedLanguage,
-          summary: 'Customer confirmed order delivery and accepted Cash on Delivery total',
-          customerEmotion: customerEmotion === 'Neutral' ? 'Positive' : customerEmotion,
-          reason: `Matched confirmation pattern: ${pattern.source}`,
+          summary: 'Customer requested cancellation of the order',
+          customerEmotion,
+          reason: 'Matched explicit cancel request',
           callbackRequestedMinutes: null
         };
       }
     }
 
-    // 5. Ambiguous / Indeterminate
+    // If customer said "confirm nahi karna", and did not provide an explicit cancellation,
+    // it MUST NOT confirm, but should remain UNKNOWN or CANCELLED based on context.
+    if (isNegatedConfirmation) {
+      return {
+        intent: 'UNKNOWN',
+        result: 'UNKNOWN',
+        confidence: 0.85,
+        language: detectedLanguage,
+        summary: 'Customer explicitly stated NOT to confirm; order confirmation withheld',
+        customerEmotion,
+        reason: 'Customer negated confirmation ("confirm nahi karna")',
+        callbackRequestedMinutes: null
+      };
+    }
+
+    // 4. Confirmation patterns (ONLY if not negated and not hesitant!)
+    if (!isNegatedConfirmation && !isHesitant) {
+      const confirmPatterns = [
+        /\b(bhej do|bhejdein|bhej dein|confirm kar dein|confirm kardo|bhejo|sahi hai|ok hai|pakka bhej do|han bhej do|bilkul bhej do)\b/i,
+        /\b(please deliver|go ahead|proceed|send it|please confirm|confirm my order|confirm the order|confirm order|yes please confirm|confirm it)\b/i,
+        /(جی بالکل|بھیج دیں|ٹھیک ہے|ہاں بھیج دیں|بھیجو)/i
+      ];
+
+      for (const pattern of confirmPatterns) {
+        if (pattern.test(raw)) {
+          return {
+            intent: 'CONFIRMED',
+            result: 'CONFIRMED',
+            confidence: 0.96,
+            language: detectedLanguage,
+            summary: 'Customer confirmed order delivery and accepted Cash on Delivery total',
+            customerEmotion: customerEmotion === 'Neutral' ? 'Positive' : customerEmotion,
+            reason: `Matched confirmation pattern: ${pattern.source}`,
+            callbackRequestedMinutes: null
+          };
+        }
+      }
+
+      // Exact or clear affirmative tokens
+      const isAffirmative = /\b(jee haan|haan jee|jee bilkul|yes confirm|yes confirmed|bilkul|theek hai|sahi hai)\b/i.test(raw) ||
+        /^(\s*(jee|ji|haan|yes)\s*[\.!]?\s*)$/i.test(raw);
+
+      if (isAffirmative || (/\b(confirm)\b/i.test(raw) && isNegatedCancellation)) {
+        return {
+          intent: 'CONFIRMED',
+          result: 'CONFIRMED',
+          confidence: 0.95,
+          language: detectedLanguage,
+          summary: 'Customer confirmed order delivery',
+          customerEmotion: customerEmotion === 'Neutral' ? 'Positive' : customerEmotion,
+          reason: 'Matched unambiguous affirmative confirmation',
+          callbackRequestedMinutes: null
+        };
+      }
+    }
+
+    // 5. Hesitant / Ambiguous / Indeterminate
     return {
       intent: 'UNKNOWN',
       result: 'UNKNOWN',
-      confidence: 0.4,
+      confidence: isHesitant ? 0.7 : 0.4,
       language: detectedLanguage,
-      summary: 'Customer response was ambiguous; requires human merchant verification',
-      customerEmotion,
-      reason: 'Utterance did not match confident confirmation or rejection pattern',
+      summary: isHesitant
+        ? 'Customer was hesitant or tentative; human confirmation required'
+        : 'Customer response was ambiguous; requires human merchant verification',
+      customerEmotion: isHesitant ? 'Hesitant' : customerEmotion,
+      reason: isHesitant
+        ? 'Customer expressed uncertainty or hesitation ("shayad / soch kar")'
+        : 'Utterance did not match confident confirmation or rejection pattern',
       callbackRequestedMinutes: null
     };
+
   }
 
   /**
