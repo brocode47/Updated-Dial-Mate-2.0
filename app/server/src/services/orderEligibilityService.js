@@ -127,6 +127,46 @@ export class OrderEligibilityService {
   }
 
   /**
+   * Calculates delay in milliseconds until the next operating window opens
+   */
+  static calculateDelayUntilNextOperatingWindow(operatingHoursStr = '09:00 - 21:00', timezoneOffset = 5) {
+    try {
+      if (!operatingHoursStr || operatingHoursStr === '24/7') return 0;
+      const parts = operatingHoursStr.split('-').map(s => s.trim());
+      if (parts.length !== 2) return 0;
+
+      const parseTime = (timeStr) => {
+        const isPM = /pm/i.test(timeStr);
+        const isAM = /am/i.test(timeStr);
+        const [h, m = '0'] = timeStr.replace(/(am|pm)/gi, '').trim().split(':').map(Number);
+        let hour = h;
+        if (isPM && hour < 12) hour += 12;
+        if (isAM && hour === 12) hour = 0;
+        return hour * 60 + m;
+      };
+
+      const startMinutes = parseTime(parts[0]);
+      const endMinutes = parseTime(parts[1]);
+
+      const now = new Date();
+      const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+      let storeMinutes = (utcMinutes + timezoneOffset * 60) % 1440;
+      if (storeMinutes < 0) storeMinutes += 1440;
+
+      let waitMinutes = 0;
+      if (storeMinutes < startMinutes) {
+        waitMinutes = startMinutes - storeMinutes;
+      } else if (storeMinutes > endMinutes) {
+        waitMinutes = (1440 - storeMinutes) + startMinutes;
+      }
+
+      return Math.max(0, waitMinutes * 60 * 1000);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /**
    * Main deterministic eligibility check
    * 
    * @param {Object} params
@@ -375,10 +415,30 @@ export class OrderEligibilityService {
       }
     }
 
-    // 10. Operating Hours Window
+    // 10. Customer Opt-Out / Do-Not-Call (DNC) Check
+    const allOrderTags = (payload.tags || orderRecord.tag || '')
+      .split(',')
+      .map(t => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    const dncTerms = ['do_not_call', 'do-not-call', 'dnc', 'opt_out', 'opt-out'];
+    const hasDncTag = allOrderTags.some(t => dncTerms.includes(t));
+    if (hasDncTag) {
+      return {
+        eligible: false,
+        reason: 'CUSTOMER_DO_NOT_CALL: Customer requested do not call / opt-out',
+        orderId: orderRecord.id || orderId,
+        shopId: shopRecord.id,
+        ruleBreakdown: { notOptedOut: false },
+        phone: cleanedPhone
+      };
+    }
+
+    // 11. Operating Hours Window
     const operatingHours = aiCallingConfig.callingHours || settings.workingHours || '09:00 - 21:00';
     const isWithinHours = this.isWithinOperatingHours(operatingHours);
     if (!isWithinHours) {
+      const delayUntilOpenMs = this.calculateDelayUntilNextOperatingWindow(operatingHours);
       return {
         eligible: false,
         reason: 'OUTSIDE_OPERATING_HOURS',
@@ -386,7 +446,8 @@ export class OrderEligibilityService {
         shopId: shopRecord.id,
         ruleBreakdown: { withinOperatingHours: false, operatingHours },
         phone: cleanedPhone,
-        canScheduleLater: true
+        canScheduleLater: true,
+        delayUntilOpenMs
       };
     }
 

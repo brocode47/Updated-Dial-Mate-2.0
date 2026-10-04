@@ -405,10 +405,10 @@ export class AICallInterpretationService {
     }
 
     // 4. Telephony failure statuses (busy, no-answer, failed)
-    if (effectiveCallStatus && ['busy', 'no-answer', 'failed', 'canceled'].includes(effectiveCallStatus.toLowerCase())) {
-      const s = effectiveCallStatus.toLowerCase();
-      const mappedIntent = s === 'busy' ? 'CALL_BACK' : (s === 'no-answer' ? 'CALL_BACK' : 'UNKNOWN');
+    if (effectiveCallStatus && ['busy', 'no-answer', 'no_answer', 'failed', 'canceled'].includes(effectiveCallStatus.toLowerCase())) {
+      const s = effectiveCallStatus.toLowerCase().replace('_', '-');
       const mappedResult = s === 'busy' ? 'BUSY' : (s === 'no-answer' ? 'NO_ANSWER' : 'FAILED');
+      const mappedIntent = mappedResult;
 
       return {
         intent: mappedIntent,

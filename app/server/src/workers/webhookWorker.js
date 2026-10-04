@@ -128,6 +128,40 @@ export async function processWebhookJob(job) {
       });
 
       return { success: true, orderId, queued: true };
+    } else if (eligibility.reason === 'OUTSIDE_OPERATING_HOURS' && eligibility.canScheduleLater) {
+      // Order placed outside operating hours: Schedule call for store opening
+      const delayMs = eligibility.delayUntilOpenMs || (60 * 60 * 1000);
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          callStatus: 'scheduled',
+          tag: `Call Scheduled for Store Opening (${Math.round(delayMs / 60000)}m delay)`
+        }
+      });
+
+      const jobId = `call-init-${shopRecord.id}-${orderId}`;
+      await callQueue.add('initiate-call', {
+        orderId,
+        shopId: shopRecord.id,
+        shopDomain: shopRecord.domain,
+        phone: eligibility.phone,
+        customerName: eligibility.customerName,
+        productName: eligibility.productName,
+        productPrice: eligibility.productPrice
+      }, {
+        delay: delayMs,
+        jobId
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shopRecord.domain,
+          event: 'Confirmation Call Scheduled',
+          detail: `Order ${orderId} deferred until store opening (${Math.round(delayMs / 60000)}m delay, Job: ${jobId})`
+        }
+      });
+
+      return { success: true, orderId, queued: true, deferred: true, delayMs };
     } else {
       // Ineligible order
       await prisma.order.update({

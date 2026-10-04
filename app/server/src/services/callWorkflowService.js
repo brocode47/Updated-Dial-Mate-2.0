@@ -53,6 +53,12 @@ export class CallWorkflowService {
       return { success: false, reason: 'UNAUTHORIZED_CROSS_TENANT_ACCESS' };
     }
 
+    // Safety 0: Terminal State Guard (Never call orders already confirmed, cancelled, or opted out)
+    if (['Confirmed', 'Cancelled'].includes(order.status) || ['confirmed', 'cancelled', 'do_not_call'].includes(order.callStatus)) {
+      console.log(`🛑 [CallWorkflow] Order ${orderId} is already in terminal state (${order.status}/${order.callStatus}). Call blocked.`);
+      return { success: false, reason: 'ORDER_ALREADY_TERMINAL' };
+    }
+
     // Safety 1: Emergency Stop Switch
     let shopSettings = {};
     if (shop.settings) {
@@ -350,6 +356,25 @@ export class CallWorkflowService {
       ? `[AI Summary]: ${decision.summary}\n[Confidence]: ${Math.round((decision.confidence || 0) * 100)}%\n\n${transcript || ''}`.trim()
       : transcript || undefined;
 
+    // Safety: Idempotency & Terminal State Guard
+    if (['Confirmed', 'Cancelled'].includes(order.status)) {
+      console.log(`ℹ️ [CallWorkflow] Order ${orderId} is already in terminal state (${order.status}). Updating call record without re-transitioning.`);
+      if (callId) {
+        await prisma.call.update({
+          where: { id: callId },
+          data: {
+            outcome: order.status,
+            intent: decision.intent || 'Order Confirmation',
+            sentiment: decision.customerEmotion || 'Neutral',
+            durationSec: durationSec || (order.status === 'Confirmed' ? 45 : 10),
+            recordingUrl: recordingUrl || undefined,
+            transcript: formattedTranscript
+          }
+        }).catch(() => {});
+      }
+      return { success: true, outcome: order.status.toUpperCase(), alreadyTerminal: true, decision };
+    }
+
     // Update Call record if provided
     if (callId) {
       await prisma.call.update({
@@ -450,10 +475,56 @@ export class CallWorkflowService {
       return { success: true, outcome: 'WRONG_NUMBER', decision };
     }
 
-    // 4. Callback Requested
+    // 4. Human Agent Requested / Escalation
+    if (decision.intent === 'HUMAN_TRANSFER' || decision.result === 'HUMAN_TRANSFER') {
+      const stateMachine = new OrderStateMachine(order.id, shop.domain);
+      await stateMachine.transition(OrderStatus.HUMAN_REQUIRED, decision.reason || 'Customer requested human agent');
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          callStatus: 'human_transfer',
+          tag: 'Human Agent Requested'
+        }
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Human Agent Escalation',
+          detail: `Order ${order.id} escalated to human support (${decision.reason || 'Requested by customer'})`
+        }
+      });
+
+      return { success: true, outcome: 'HUMAN_TRANSFER', decision };
+    }
+
+    // 5. Customer Opt-Out / Do Not Call
+    if (decision.intent === 'DO_NOT_CALL' || decision.result === 'DO_NOT_CALL') {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          callStatus: 'do_not_call',
+          tag: 'Customer Opt-Out (Do Not Call)'
+        }
+      });
+
+      await prisma.complianceLog.create({
+        data: {
+          shopDomain: shop.domain,
+          event: 'Customer Opt-Out (Do Not Call)',
+          detail: `Customer on call for Order ${order.id} requested do-not-call / opt-out`
+        }
+      });
+
+      return { success: true, outcome: 'DO_NOT_CALL', decision };
+    }
+
+    // 6. Callback Requested
     if (decision.intent === 'CALL_BACK' || decision.result === 'CALLBACK_REQUESTED') {
       const delayMinutes = decision.callbackRequestedMinutes || 60;
       const delayMs = delayMinutes * 60 * 1000;
+      const jobId = `cb-${shop.id}-${order.id}-${delayMinutes}m`;
 
       await callQueue.add('callback', {
         orderId: order.id,
@@ -462,7 +533,7 @@ export class CallWorkflowService {
         reason: decision.reason
       }, {
         delay: delayMs,
-        jobId: `cb-${shop.id}-${order.id}-${Date.now()}`
+        jobId
       });
 
       await prisma.order.update({
@@ -484,7 +555,7 @@ export class CallWorkflowService {
       return { success: true, outcome: 'CALL_BACK', decision };
     }
 
-    // 5. No Answer / Busy / Telephony Failure -> Retry or WhatsApp Fallback
+    // 7. No Answer / Busy / Telephony Failure -> Retry or WhatsApp Fallback
     const isUnreachable = ['NO_ANSWER', 'BUSY', 'FAILED', 'UNKNOWN'].includes(decision.result);
     if (isUnreachable) {
       const currentRetryCount = order.retryCount || 0;

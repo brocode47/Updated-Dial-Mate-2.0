@@ -57,17 +57,25 @@ vi.mock('../src/integrations/ai/dispatcher.js', () => ({
   dispatchToolCall: vi.fn()
 }));
 
+import { MessageTrackerService } from '../src/services/messageTracker.js';
+
 describe('WA-AKG API Contract Mismatch Fixes', () => {
   let app;
   const SECRET = 'test-secret';
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.WA_AKG_WEBHOOK_SECRET = SECRET;
     
     app = express();
     // Raw body parser exactly as in production
     app.use('/webhooks', express.raw({ type: 'application/json' }));
     app.use('/webhooks', webhooksRouter());
+
+    try {
+      await MessageTrackerService.reset('msg-id-123');
+      await MessageTrackerService.reset('msg-id-text');
+      await MessageTrackerService.reset('msg-1');
+    } catch (_) {}
 
     vi.clearAllMocks();
   });
