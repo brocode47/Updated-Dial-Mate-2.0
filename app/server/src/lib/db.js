@@ -1,6 +1,8 @@
 import pkg from '@prisma/client';
 const { PrismaClient } = pkg;
 
+import fs from 'fs';
+
 let dbUrl = process.env.DATABASE_URL;
 if (dbUrl) {
   dbUrl = dbUrl
@@ -8,7 +10,8 @@ if (dbUrl) {
     .replace('${POSTGRES_PASSWORD}', process.env.POSTGRES_PASSWORD || 'dialmatepassword')
     .replace('${POSTGRES_DB}', process.env.POSTGRES_DB || 'dialmate');
 
-  if (dbUrl.includes('@db:5432')) {
+  const isInsideDocker = fs.existsSync('/.dockerenv');
+  if (!isInsideDocker && process.env.NODE_ENV !== 'production' && dbUrl.includes('@db:5432')) {
     dbUrl = dbUrl.replace('@db:5432', '@localhost:5432');
   }
 }

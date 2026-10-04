@@ -1,7 +1,10 @@
 import Redis from 'ioredis';
 
+import fs from 'fs';
+
 let REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-if (REDIS_URL.includes('redis:6379')) {
+const isInsideDocker = fs.existsSync('/.dockerenv');
+if (!isInsideDocker && process.env.NODE_ENV !== 'production' && REDIS_URL.includes('redis:6379')) {
   REDIS_URL = REDIS_URL.replace('redis:6379', 'localhost:6379');
 }
 
