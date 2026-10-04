@@ -176,9 +176,9 @@ export class AICallInterpretationService {
 
     // 2. Callback requested patterns
     const callbackPatterns = [
-      /\b(baad me|baad mein|busy hoon|busy hu|masroof|shaam ko|shaam me|kal call|phir call|thori der baad|after some time|call back|call later)\b/i,
+      /\b(baad me|baad mein|busy hoon|busy hu|masroof|shaam ko|shaam me|kal shaam|kal call|call kar lena|\bkal\b|phir call|thori der baad|after some time|call back|call later)\b/i,
       /\b(driving|driving kar|baad call|ghante baad|ghanta baad|office mein)\b/i,
-      /(بعد میں|مصروف ہوں|شام کو|کل کال کریں|دوبارہ کال|ڈرائیونگ)/i
+      /(بعد میں|مصروف ہوں|شام کو|کل کال کریں|دوبارہ کال|ڈرائیونگ|کل شام|(?<=^|[\s،۔])کل(?=[\s،۔]|$))/i
     ];
     for (const pattern of callbackPatterns) {
       if (pattern.test(raw) && !isNegatedCancellation) {

@@ -70,6 +70,16 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
 
     // Input validation
     const validatedArgs = schema.parse(mergedArgs);
+
+    // Resolve orderId to internal database UUID if model provided orderNumber or alias (e.g. '#1099' or '1099')
+    if (context.orderId) {
+      if (!validatedArgs.orderId || 
+          validatedArgs.orderId.startsWith('#') || 
+          (context.orderNumber && (validatedArgs.orderId === context.orderNumber || validatedArgs.orderId === `#${context.orderNumber}`)) ||
+          /^\d+$/.test(validatedArgs.orderId)) {
+        validatedArgs.orderId = context.orderId;
+      }
+    }
     
     // Helper to get Shopify ID
     const getShopifyId = async (dbOrderId) => {

@@ -1,7 +1,19 @@
 import pkg from '@prisma/client';
 const { PrismaClient } = pkg;
 
-export const prisma = new PrismaClient();
+let dbUrl = process.env.DATABASE_URL;
+if (dbUrl) {
+  dbUrl = dbUrl
+    .replace('${POSTGRES_USER}', process.env.POSTGRES_USER || 'dialmate')
+    .replace('${POSTGRES_PASSWORD}', process.env.POSTGRES_PASSWORD || 'dialmatepassword')
+    .replace('${POSTGRES_DB}', process.env.POSTGRES_DB || 'dialmate');
+
+  if (dbUrl.includes('@db:5432')) {
+    dbUrl = dbUrl.replace('@db:5432', '@localhost:5432');
+  }
+}
+
+export const prisma = new PrismaClient(dbUrl ? { datasources: { db: { url: dbUrl } } } : undefined);
 
 // Backwards compatibility layer while migrating
 let isInitialized = false;
