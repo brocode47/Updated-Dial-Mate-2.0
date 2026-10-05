@@ -240,16 +240,27 @@ async function runVerification() {
     // PART 5: Multi-Tenant Isolation
     // -------------------------------------------------------------
     console.log('\n--- 5. MULTI-TENANT ISOLATION ---');
-    const nonExistentShopRes = await WhatsAppAgentService.handleIncomingMessage({
-      shopDomain: 'non-existent-shop-12345.myshopify.com',
-      sessionId: 'fake-session',
-      fromJid: '923001234567@s.whatsapp.net',
-      text: 'Order status check'
-    });
+    let nonExistentRejected = false;
+    let nonExistentError = '';
+    try {
+      const nonExistentShopRes = await WhatsAppAgentService.handleIncomingMessage({
+        shopDomain: 'non-existent-shop-12345.myshopify.com',
+        sessionId: 'fake-session',
+        fromPhone: '923001234567',
+        messageText: 'Order status check'
+      });
+      if (nonExistentShopRes && nonExistentShopRes.success === false) {
+        nonExistentRejected = true;
+        nonExistentError = nonExistentShopRes.error;
+      }
+    } catch (err) {
+      nonExistentRejected = true;
+      nonExistentError = err.message;
+    }
     assert(
-      nonExistentShopRes.success === false,
+      nonExistentRejected,
       'Multi-tenant guard: Unknown/unauthorized shop request is rejected',
-      `Error: ${nonExistentShopRes.error}`
+      `Error caught: ${nonExistentError}`
     );
 
     console.log('\n================================================================');

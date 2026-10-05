@@ -82,7 +82,7 @@ export class WhatsAppAgentService {
       }
     }
 
-    // Confirmation phrases (or confirm negation)
+    // Confirmation phrases (or confirm negation handled by safety guard)
     if (/\b(confirm\s*(kar|kardo|karein|karna|dein)?|haan|yes|ji|dispatch\s*(kar|kardo|dein)?|bhej\s*(do|dein)?)\b/i.test(clean) || confirmNegated) {
       return { intent: 'CONFIRM', confidence: 0.90 };
     }
@@ -98,14 +98,15 @@ export class WhatsAppAgentService {
   /**
    * Main entry point to process incoming WhatsApp messages
    */
-  static async handleIncomingMessage({
-    shopId,
-    shopDomain,
-    sessionId,
-    fromPhone,
-    messageText,
-    messageId = null
-  }) {
+  static async handleIncomingMessage(params) {
+    const {
+      shopId,
+      shopDomain,
+      sessionId,
+      messageId = null
+    } = params;
+    const fromPhone = params.fromPhone || params.fromJid || params.phone;
+    const messageText = params.messageText || params.text || '';
     const startTime = Date.now();
     console.log(`🤖 [WhatsAppAgent] Processing incoming message from ${fromPhone} (Shop: ${shopDomain}, Session: ${sessionId}): "${messageText}"`);
 
@@ -121,7 +122,8 @@ export class WhatsAppAgentService {
       throw new Error(`Shop not found for incoming WhatsApp message: ${shopId || shopDomain}`);
     }
 
-    const cleanPhone = OrderEligibilityService.cleanPhoneNumber(fromPhone) || fromPhone.replace(/[^0-9]/g, '');
+    const rawPhone = String(fromPhone || '').split('@')[0];
+    const cleanPhone = OrderEligibilityService.cleanPhoneNumber(rawPhone) || rawPhone.replace(/[^0-9]/g, '');
 
     // 2. Find or Create Customer
     let customer = await prisma.customer.findFirst({

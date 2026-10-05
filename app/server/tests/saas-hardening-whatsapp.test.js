@@ -5,6 +5,7 @@ import { CallWorkflowService } from '../src/services/callWorkflowService.js';
 import { WhatsAppOrderMessageService } from '../src/services/whatsappOrderMessageService.js';
 import { WhatsAppAgentService } from '../src/services/whatsappAgentService.js';
 import { ToolDispatcher } from '../src/integrations/ai/dispatcher.js';
+import * as aiClientModule from '../src/integrations/ai/client.js';
 
 describe('Dial Mate 2.0 — Production SaaS Hardening & WhatsApp Customer Agent', () => {
   beforeEach(() => {
@@ -519,6 +520,14 @@ describe('Dial Mate 2.0 — Production SaaS Hardening & WhatsApp Customer Agent'
       const orderFindSpy = vi.spyOn(prisma.order, 'findFirst').mockResolvedValue(null);
       vi.spyOn(prisma.message, 'create').mockResolvedValue({});
       vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      // Mock AI response to keep test deterministic and fast
+      vi.spyOn(aiClientModule, 'getAIClient').mockReturnValue({
+        models: {
+          generateContent: vi.fn().mockResolvedValue({
+            text: 'Aapka koi active order nahi mila.'
+          })
+        }
+      });
 
       await WhatsAppAgentService.handleIncomingMessage({
         shopId: 'shop-A',
