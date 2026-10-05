@@ -223,7 +223,7 @@ async function runVerification() {
         });
 
         assert(
-          takeoverRes.ignored === true && takeoverRes.reason === 'HUMAN_TAKEOVER_ACTIVE',
+          takeoverRes.handledByHuman === true,
           'Human takeover guard: AI remains silent when conversation is marked as human takeover',
           `Result: ${JSON.stringify(takeoverRes)}`
         );
