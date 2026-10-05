@@ -309,7 +309,7 @@ Zara:`
         );
 
         const response = await aiClient.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
           contents: prompt,
           config: {
             systemInstruction,
@@ -388,7 +388,7 @@ Zara:`
         detectedAgent: 'Zara',
         intent: detected.intent,
         action: executedAction || 'REPLY',
-        modelUsed: usedLLM ? 'gemini-2.5-flash' : 'rule_engine',
+        modelUsed: usedLLM ? (process.env.GEMINI_MODEL || 'gemini-3.8-flash') : 'rule_engine',
         usedLLM,
         responseTimeMs: Date.now() - startTime,
         status: 'SUCCESS'

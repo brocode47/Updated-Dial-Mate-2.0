@@ -58,7 +58,7 @@ export class WhatsAppClient {
       const response = await axios.post(
         url,
         {
-          message: text,
+          message: typeof text === 'string' ? { text } : text,
           mentions: options.mentions || [],
           quotedMessageId: options.quotedMessageId
         },
