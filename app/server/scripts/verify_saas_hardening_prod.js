@@ -9,7 +9,7 @@
  */
 
 import { prisma } from '../src/lib/db.js';
-import { CallRecordingRetentionService } from '../src/services/callRecordingRetentionService.js';
+import { CallRecordingRetentionService, MAX_STORED_CALL_RECORDINGS } from '../src/services/callRecordingRetentionService.js';
 import { WhatsAppOrderMessageService } from '../src/services/whatsappOrderMessageService.js';
 import { WhatsAppAgentService } from '../src/services/whatsappAgentService.js';
 import { WhatsAppClient } from '../src/integrations/whatsapp/client.js';
@@ -40,7 +40,7 @@ async function runVerification() {
     // -------------------------------------------------------------
     console.log('--- 1. CALL RECORDING RETENTION INVARIANT ---');
     assert(
-      CallRecordingRetentionService.MAX_STORED_CALL_RECORDINGS === 20,
+      MAX_STORED_CALL_RECORDINGS === 20 && CallRecordingRetentionService.MAX_STORED_CALL_RECORDINGS === 20,
       'MAX_STORED_CALL_RECORDINGS constant is strictly 20',
       `Value: ${CallRecordingRetentionService.MAX_STORED_CALL_RECORDINGS}`
     );
@@ -68,10 +68,12 @@ async function runVerification() {
     try {
       const statusRes = await waClient.checkSessionStatus(sessionId);
       console.log('   WA-AKG Session Check Result:', JSON.stringify(statusRes));
+      const isConnected = statusRes.status === 'CONNECTED' || statusRes.data?.status === 'CONNECTED';
+      const myJid = statusRes.data?.me?.id || statusRes.me?.id || 'N/A';
       assert(
-        statusRes.connected === true,
+        isConnected,
         `WA-AKG Session '${sessionId}' is CONNECTED`,
-        `Status: ${statusRes.status}, JID: ${statusRes.me?.id || statusRes.jid || 'N/A'}`
+        `Status: ${statusRes.status}, JID: ${myJid}`
       );
     } catch (err) {
       console.error('   WA-AKG check failed:', err.message);
@@ -95,47 +97,51 @@ async function runVerification() {
     console.log('\n--- 3. OUTBOUND ORDER COMMUNICATION & PRICE RECONCILIATION ---');
     
     // Test 3A: Valid Price Calculation
-    const validCalc = WhatsAppOrderMessageService.reconcileOrderPrice({
+    const validCalc = WhatsAppOrderMessageService.reconcilePrice({
       line_items: [{ price: '1200.00', quantity: 2 }],
       total_shipping_price_set: { shop_money: { amount: '200.00' } },
       total_discounts: '100.00',
       total_price: '2500.00'
-    });
+    }, 2500.00);
     assert(
-      validCalc.valid === true && validCalc.calculatedTotal === 2500,
+      validCalc.reconciled === true && validCalc.calculatedTotal === 2500,
       'Price reconciliation: matches line_items (2400) + shipping (200) - discount (100) = 2500',
       `Calculated: ${validCalc.calculatedTotal}, Authoritative: ${validCalc.authoritativeTotal}`
     );
 
     // Test 3B: Discrepancy Detection (> 1.0 PKR)
-    const discrepancyCalc = WhatsAppOrderMessageService.reconcileOrderPrice({
+    const discrepancyCalc = WhatsAppOrderMessageService.reconcilePrice({
       line_items: [{ price: '1000.00', quantity: 1 }],
       total_shipping_price_set: { shop_money: { amount: '150.00' } },
       total_discounts: '0.00',
       total_price: '1500.00' // Discrepancy: 1150 vs 1500
-    });
+    }, 1500.00);
     assert(
-      discrepancyCalc.valid === false && discrepancyCalc.difference === 350,
+      discrepancyCalc.reconciled === false && discrepancyCalc.diff === 350,
       'Price reconciliation: flags discrepancy (> 1 PKR) and blocks dispatch',
-      `Discrepancy diff: ${discrepancyCalc.difference} PKR`
+      `Discrepancy diff: ${discrepancyCalc.diff} PKR`
     );
 
     // Test 3C: Message template format
     const formattedMsg = WhatsAppOrderMessageService.formatOrderConfirmationMessage({
+      storeName: 'Sunday Bazaaar',
       customerName: 'Hamza Khan',
-      orderName: '#TEST-1001',
-      items: [{ title: 'Wireless Earbuds', quantity: 1, price: '2500' }],
-      calculatedTotal: 2700,
-      currency: 'PKR',
-      shippingAddress: 'House 12, Street 4, F-7/2, Islamabad'
+      orderNumber: 'TEST-1001',
+      items: [{ title: 'Wireless Earbuds', quantity: 1, subtotal: 2500 }],
+      shippingFee: 200,
+      discountAmount: 0,
+      totalPayable: 2700,
+      deliverySLA: '2-4 working days'
     });
     assert(
       formattedMsg.includes('Hamza Khan') &&
+      formattedMsg.includes('Sunday Bazaaar') &&
       formattedMsg.includes('#TEST-1001') &&
       formattedMsg.includes('Wireless Earbuds') &&
-      formattedMsg.includes('F-7/2, Islamabad') &&
-      formattedMsg.includes('reply karke confirm ya change kar sakte hain'),
-      'Formatted message contains customer name, order name, items, address, and reply prompt'
+      formattedMsg.includes('Rs. 2,700') &&
+      formattedMsg.includes('Confirm') &&
+      formattedMsg.includes('Cancel'),
+      'Formatted message contains customer name, order name, items, total, and reply prompts'
     );
 
     // -------------------------------------------------------------
@@ -144,24 +150,26 @@ async function runVerification() {
     console.log('\n--- 4. INBOUND WHATSAPP AI CUSTOMER AGENT ("ZARA") ---');
 
     // Test 4A: Negation Safety Rule Engine
-    const neg1 = WhatsAppAgentService.detectIntentAndEntities('mera order confirm mat karna please');
+    const neg1 = WhatsAppAgentService.isNegated('mera order confirm mat karna please', 'confirm');
+    const intent1 = WhatsAppAgentService.detectIntent('mera order confirm mat karna please');
     assert(
-      neg1.intent !== 'CONFIRM_ORDER' && neg1.hasNegation === true,
-      'Negation safety: "confirm mat karna" is NOT classified as CONFIRM_ORDER',
-      `Detected intent: ${neg1.intent}, Negation: ${neg1.hasNegation}`
+      neg1 === true && intent1.intent !== 'CONFIRM',
+      'Negation safety: "confirm mat karna" is correctly identified as negated confirm',
+      `isNegated: ${neg1}, Intent: ${intent1.intent}`
     );
 
-    const neg2 = WhatsAppAgentService.detectIntentAndEntities('order cancel nahi karna');
+    const neg2 = WhatsAppAgentService.isNegated('order cancel nahi karna confirm hi rakhna', 'cancel');
+    const intent2 = WhatsAppAgentService.detectIntent('order cancel nahi karna confirm hi rakhna');
     assert(
-      neg2.intent !== 'CANCEL_ORDER' && neg2.hasNegation === true,
-      'Negation safety: "cancel nahi karna" is NOT classified as CANCEL_ORDER',
-      `Detected intent: ${neg2.intent}, Negation: ${neg2.hasNegation}`
+      neg2 === true && intent2.intent === 'CONFIRM',
+      'Negation safety: "cancel nahi karna / confirm hi rakhna" resolves safely to CONFIRM',
+      `isNegated: ${neg2}, Intent: ${intent2.intent}`
     );
 
-    const posConfirm = WhatsAppAgentService.detectIntentAndEntities('jee haan bilkul order confirm hai');
+    const posConfirm = WhatsAppAgentService.detectIntent('jee haan bilkul order confirm hai');
     assert(
-      posConfirm.intent === 'CONFIRM_ORDER',
-      'Affirmative detection: "jee haan bilkul order confirm hai" -> CONFIRM_ORDER',
+      posConfirm.intent === 'CONFIRM',
+      'Affirmative detection: "jee haan bilkul order confirm hai" -> CONFIRM',
       `Detected intent: ${posConfirm.intent}`
     );
 
@@ -184,7 +192,6 @@ async function runVerification() {
       );
 
       // Test 4C: Human Takeover Guard
-      // Create or update a test conversation with isTakeover: true
       const testCustomer = await prisma.customer.findFirst({
         where: { shopId: targetShop.id }
       });
@@ -233,7 +240,6 @@ async function runVerification() {
     // PART 5: Multi-Tenant Isolation
     // -------------------------------------------------------------
     console.log('\n--- 5. MULTI-TENANT ISOLATION ---');
-    // Ensure that resolving session for unknown shop throws error or returns null
     const nonExistentShopRes = await WhatsAppAgentService.handleIncomingMessage({
       shopDomain: 'non-existent-shop-12345.myshopify.com',
       sessionId: 'fake-session',

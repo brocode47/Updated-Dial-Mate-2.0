@@ -20,6 +20,7 @@ let retentionLock = Promise.resolve();
  * - Concurrency safe: Serialized execution prevents race conditions.
  */
 export class CallRecordingRetentionService {
+  static MAX_STORED_CALL_RECORDINGS = MAX_STORED_CALL_RECORDINGS;
   /**
    * Extracts Twilio Recording SID (RE...) from a recording URL or SID string
    */
