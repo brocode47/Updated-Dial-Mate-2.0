@@ -313,6 +313,23 @@ export function twilioRouter() {
     const durationSec = parseInt(req.body?.CallDuration || req.query?.CallDuration || '0', 10);
     const recordingUrl = req.body?.RecordingUrl || req.query?.RecordingUrl || null;
 
+    const normalizedStatus = String(callStatus).trim().toLowerCase().replace(/_/g, '-');
+    const nonTerminalStatuses = ['initiated', 'ringing', 'queued', 'in-progress'];
+    const terminalStatuses = ['completed', 'busy', 'no-answer', 'failed', 'canceled'];
+
+    // Update telemetry: link providerCallSid to call record if available
+    if (callId && callSid) {
+      await prisma.call.update({
+        where: { id: callId },
+        data: { providerCallSid: callSid }
+      }).catch(() => {});
+    }
+
+    if (nonTerminalStatuses.includes(normalizedStatus) || !terminalStatuses.includes(normalizedStatus)) {
+      console.log(`ℹ️ [TwilioStatus] Intermediate status [${callStatus}] for Order ${orderId || 'N/A'}. Skipping terminal outcome handling.`);
+      return res.sendStatus(200);
+    }
+
     try {
       if (orderId) {
         const order = await prisma.order.findUnique({
@@ -332,7 +349,7 @@ export function twilioRouter() {
             orderId: order.id,
             shopDomain: order.shop.domain,
             callId,
-            callStatus,
+            callStatus: normalizedStatus,
             durationSec,
             recordingUrl,
             transcript: callTranscript || undefined

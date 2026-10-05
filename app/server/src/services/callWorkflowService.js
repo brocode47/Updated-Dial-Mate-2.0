@@ -329,6 +329,13 @@ export class CallWorkflowService {
   }) {
     console.log(`📊 [CallWorkflow] Handling call result for order ${orderId} (Status: ${callStatus}, Digits: ${digits}, Tool: ${toolExecuted})`);
 
+    const normalizedCallStatus = String(callStatus || '').trim().toLowerCase().replace(/_/g, '-');
+    const nonTerminalStatuses = ['initiated', 'ringing', 'queued', 'in-progress'];
+    if (nonTerminalStatuses.includes(normalizedCallStatus)) {
+      console.log(`ℹ️ [CallWorkflow] Ignoring non-terminal status [${callStatus}] for Order ${orderId}`);
+      return { success: true, nonTerminal: true, callStatus };
+    }
+
     const order = await prisma.order.findUnique({
       where: { id: String(orderId) },
       include: { shop: true, customer: true }
