@@ -21,6 +21,9 @@ export class Agent {
     this.systemInstruction = options.systemInstruction || null;
     this.shopDomain = options.shopDomain || null;
     this.context = options.context || {};
+    this.voiceName = options.voiceName || process.env.GEMINI_VOICE_NAME || 'Aoede';
+    this.onUserTranscription = options.onUserTranscription || (() => {});
+    this.onAssistantTranscription = options.onAssistantTranscription || (() => {});
     
     // Conversation turns memory
     this.transcript = [];
@@ -70,6 +73,13 @@ export class Agent {
       config: {
         systemInstruction: { parts: [{ text: systemInstruction }] },
         tools: [{ functionDeclarations: this.tools }],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: this.voiceName
+            }
+          }
+        },
         responseModalities: ['AUDIO'],
         inputAudioTranscription: {},
         outputAudioTranscription: {}
@@ -176,10 +186,14 @@ export class Agent {
 
     // Capture transcription events from Gemini Live
     if (content?.inputTranscription?.text) {
-      this.recordTurn('user', content.inputTranscription.text);
+      const userText = content.inputTranscription.text;
+      this.recordTurn('user', userText);
+      this.onUserTranscription(userText);
     }
     if (content?.outputTranscription?.text) {
-      this.recordTurn('assistant', content.outputTranscription.text);
+      const assistantText = content.outputTranscription.text;
+      this.recordTurn('assistant', assistantText);
+      this.onAssistantTranscription(assistantText);
     }
 
     // Turn complete

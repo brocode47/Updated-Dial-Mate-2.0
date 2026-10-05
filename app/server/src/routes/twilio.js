@@ -56,7 +56,8 @@ export function twilioRouter() {
     stream.parameter({ name: 'orderNumber', value: orderNumber });
 
     // Optional initial message before connecting stream, but the stream itself is bidirectional.
-    // Twilio will execute <Connect> and block.
+    // Twilio will execute <Connect> and block. When stream closes, execute Hangup.
+    response.hangup();
 
     res.type('text/xml');
     res.send(response.toString());
@@ -73,7 +74,9 @@ export function twilioRouter() {
     let agent = null;
     let codec = new AudioCodec();
     let terminalToolExecuted = null;
+    let isHangupAuthorized = false;
     let gracefulHangupTimer = null;
+    let explicitHangupRequested = false;
 
     const clearHangupTimer = () => {
       if (gracefulHangupTimer) {
@@ -82,13 +85,32 @@ export function twilioRouter() {
       }
     };
 
-    const scheduleGracefulHangup = (delayMs = 8000) => {
+    const triggerCarrierHangup = async () => {
       clearHangupTimer();
-      gracefulHangupTimer = setTimeout(() => {
-        if (ws.readyState === 1 /* OPEN */) {
-          console.log('⏳ Graceful hangup timer expired after terminal action.');
-          ws.close();
+      if (callSid) {
+        try {
+          const { CallWorkflowService } = await import('../services/callWorkflowService.js');
+          const twilioClient = CallWorkflowService.getTwilioClient();
+          if (twilioClient) {
+            console.log(`📞 [Twilio:Media] Explicitly terminating Twilio carrier call ${callSid}`);
+            await twilioClient.calls(callSid).update({ status: 'completed' });
+          }
+        } catch (e) {
+          console.warn(`⚠️ [Twilio:Media] Notice on carrier call termination: ${e.message}`);
         }
+      }
+      if (ws.readyState === 1 /* OPEN */) {
+        ws.close();
+      }
+    };
+
+    const scheduleGracefulHangup = (delayMs = 3000) => {
+      clearHangupTimer();
+      isHangupAuthorized = true;
+      console.log(`⏳ [Twilio:Media] Graceful hangup scheduled in ${delayMs}ms`);
+      gracefulHangupTimer = setTimeout(() => {
+        console.log('⏳ Graceful hangup timer expired. Terminating call.');
+        triggerCarrierHangup();
       }, delayMs);
     };
 
@@ -154,7 +176,7 @@ export function twilioRouter() {
             agent = new Agent({
               shopDomain: order.shop.domain,
               systemInstruction: systemInstruction,
-              context: { eventId: msg.start.streamSid, orderId: order.id }, // streamSid & orderId for tenant-isolated tool calls
+              context: { eventId: msg.start.streamSid, orderId: order.id, callId }, // streamSid & orderId for tenant-isolated tool calls
               onAudioOut: (pcm16) => {
                 if (ws.readyState === 1 /* OPEN */) {
                   const ulawBase64 = codec.geminiToTwilio(pcm16);
@@ -167,6 +189,44 @@ export function twilioRouter() {
                   }
                 }
               },
+              onUserTranscription: (text) => {
+                const clean = String(text || '').trim().toLowerCase();
+                if (!clean) return;
+
+                // Explicit customer demand to cut the call
+                if (/\b(cut the call|call cut|call end|band kar do|band karo|hang up|disconnect|phone rakho|phone kaat do)\b/i.test(clean)) {
+                  console.log(`🛑 [Twilio:Media] Customer demanded call disconnect: "${clean}"`);
+                  explicitHangupRequested = true;
+                  isHangupAuthorized = true;
+                  scheduleGracefulHangup(1500);
+                  return;
+                }
+
+                // Check if customer is saying farewell vs continuing conversation
+                const isFarewell = /\b(allah hafiz|bye|goodbye|auf wiedersehen|tkl office)\b/i.test(clean);
+                const hasContinuationIntent = /\b(ek aur|suno|wait|ruko|question|sawal|poochna|lekin|aur|price|kya|kyun|kaise)\b/i.test(clean);
+
+                if (isHangupAuthorized) {
+                  if (hasContinuationIntent) {
+                    // Customer genuinely re-opens conversation!
+                    console.log(`🗣️ [Twilio:Media] Genuine conversation continuation detected: "${clean}". Resuming conversation.`);
+                    isHangupAuthorized = false;
+                    explicitHangupRequested = false;
+                    terminalToolExecuted = null;
+                    clearHangupTimer();
+                  } else if (isFarewell) {
+                    console.log(`👋 [Twilio:Media] Farewell exchanged: "${clean}". Finalizing hangup.`);
+                    scheduleGracefulHangup(1500);
+                  }
+                }
+              },
+              onAssistantTranscription: (text) => {
+                const clean = String(text || '').toLowerCase();
+                if (/\b(allah hafiz|goodbye)\b/i.test(clean)) {
+                  // Zara expressed farewell
+                  isHangupAuthorized = true;
+                }
+              },
               onClear: () => {
                 // Interruption / barge-in triggered:
                 // 1. Reset codec resampler buffers to eliminate stale audio
@@ -175,43 +235,34 @@ export function twilioRouter() {
                 if (ws.readyState === 1 /* OPEN */) {
                   ws.send(JSON.stringify({ event: 'clear', streamSid: streamSid }));
                 }
-                // 3. If customer barges in, cancel pending hangup timer
-                clearHangupTimer();
+                // 3. If customer barges in before hangup was authorized, clear hangup timer
+                if (!isHangupAuthorized) {
+                  clearHangupTimer();
+                }
               },
               onTurnComplete: () => {
-                // If a terminal action took place and Zara finished speaking the farewell/acknowledgement,
-                // schedule graceful hangup allowing customer an 8s window to ask a follow-up or say goodbye.
-                if (terminalToolExecuted) {
-                  scheduleGracefulHangup(8000);
+                // If a terminal action took place or hangup is authorized and Zara finished speaking,
+                // schedule graceful hangup allowing customer an appropriate window
+                if (isHangupAuthorized || terminalToolExecuted) {
+                  const delay = explicitHangupRequested ? 1500 : 3000;
+                  scheduleGracefulHangup(delay);
                 }
               },
               onClose: async (err) => {
                 console.log('🛑 Gemini Session Closed', err ? err.message : '');
                 clearHangupTimer();
-                try {
-                  const finalOrder = await prisma.order.findUnique({ where: { id: orderId } });
-                  if (finalOrder && finalOrder.status === 'Human Transfer') {
-                    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-                    await twilioClient.calls(callSid).update({
-                      twiml: '<Response><Say>Transferring you to a human agent.</Say><Dial>+923000000000</Dial></Response>'
-                    });
-                  } else if (finalOrder && finalOrder.status !== 'Confirmed' && finalOrder.status !== 'Cancelled') {
-                    // Unexpected drop or error, fallback to TwiML
-                    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-                    await twilioClient.calls(callSid).update({
-                      twiml: '<Response><Say>We are experiencing technical difficulties. We will call you back later.</Say><Hangup/></Response>'
-                    });
-                  }
-                } catch (e) {
-                  console.error('Error in Twilio fallback:', e.message);
-                }
               },
               onToolExecuted: (toolName, result) => {
                 console.log(`🔧 Tool executed in active call: ${toolName}`, result);
-                if (['request_human_transfer', 'confirm_order', 'cancel_order', 'schedule_callback'].includes(toolName)) {
+                if (['request_human_transfer', 'confirm_order', 'cancel_order', 'schedule_callback', 'end_call'].includes(toolName)) {
                   terminalToolExecuted = toolName;
-                  // Fallback safety hangup after 15s if turnComplete is delayed
-                  scheduleGracefulHangup(15000);
+                  isHangupAuthorized = true;
+                  if (toolName === 'end_call') {
+                    scheduleGracefulHangup(2500);
+                  } else {
+                    // Fallback safety hangup after 8s if turnComplete is delayed
+                    scheduleGracefulHangup(8000);
+                  }
                 }
               }
             });
@@ -230,8 +281,7 @@ export function twilioRouter() {
             if (agent) {
               const pcm16 = codec.twilioToGemini(msg.media.payload);
               if (pcm16) {
-                // Customer is speaking: clear any pending hangup timer
-                clearHangupTimer();
+                // Stream audio chunk to Gemini Live (note: raw RTP media packets do NOT clear hangup timer)
                 agent.sendAudio(pcm16);
               }
             }

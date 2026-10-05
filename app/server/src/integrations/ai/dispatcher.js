@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import * as ordersApi from '../shopify/orders.js';
+import { searchShopifyProducts } from '../shopify/products.js';
 import { OrderStateMachine, OrderStatus } from '../../services/OrderStateMachine.js';
+import { HumanEscalationService } from '../../services/humanEscalationService.js';
 import { prisma } from '../../lib/db.js';
 
 export const toolSchemas = {
@@ -49,6 +51,12 @@ export const toolSchemas = {
   request_human_transfer: z.object({
     orderId: z.string().describe('The internal database UUID of the order'),
     reason: z.string().optional().default('human_requested')
+  }),
+  search_shopify_products: z.object({
+    query: z.string().describe('The product title or keywords to search for in store catalog')
+  }),
+  end_call: z.object({
+    reason: z.string().optional().default('conversation_completed')
   })
 };
 
@@ -237,11 +245,33 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
       case 'request_human_transfer': {
         const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
         const updated = await stateMachine.transition(OrderStatus.HUMAN_REQUIRED, validatedArgs.reason);
+        const escalation = await HumanEscalationService.escalate({
+          shopDomain,
+          orderId: validatedArgs.orderId,
+          reason: validatedArgs.reason,
+          context
+        });
         return {
           success: true,
+          status: 'human_requested',
           transferred: true,
+          liveTransfer: false,
+          notificationSent: escalation.notificationSent,
           reason: validatedArgs.reason,
+          message: escalation.message,
           data: toSafeOrderResult(updated)
+        };
+      }
+      case 'search_shopify_products': {
+        const result = await searchShopifyProducts(shopDomain, validatedArgs.query);
+        return result;
+      }
+      case 'end_call': {
+        return {
+          success: true,
+          callEnded: true,
+          reason: validatedArgs.reason,
+          message: 'Call termination authorized after polite closing exchange.'
         };
       }
       default:

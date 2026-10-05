@@ -69,11 +69,33 @@ export const AITools = {
   },
   request_human_transfer: {
     name: 'request_human_transfer',
-    description: 'Transfer the conversation or escalate to a human agent when customer is upset, disputes order, or demands human manager.',
+    description: 'Escalate to human support when customer demands a real person, is upset, or disputes order. Notifies human support via WhatsApp and records customer request for prompt follow-up.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        reason: { type: 'STRING', description: 'Reason for transferring to human' }
+        reason: { type: 'STRING', description: 'Reason for escalating to human support' }
+      },
+      required: ['reason']
+    }
+  },
+  search_shopify_products: {
+    name: 'search_shopify_products',
+    description: 'Search the store Shopify catalog for products when customer asks about another product, catalog availability, or pricing (e.g. "chair protection cover", "leather belt"). Returns factual matching product titles, prices, descriptions, and stock availability.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: { type: 'STRING', description: 'Product title, item name, or keywords to search in store catalog' }
+      },
+      required: ['query']
+    }
+  },
+  end_call: {
+    name: 'end_call',
+    description: 'Conclude and end the phone call gracefully when the customer or agent says goodbye (e.g. "Allah Hafiz", "Goodbye", "Call cut kar dein", "Thank you bye", "Bas itna hi") and the conversation has naturally concluded.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        reason: { type: 'STRING', description: 'Reason for ending the call (e.g. customer_goodbye, conversation_completed, customer_requested_disconnect)' }
       },
       required: ['reason']
     }
