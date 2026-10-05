@@ -413,5 +413,51 @@ export function twilioRouter() {
     return res.sendStatus(200);
   });
 
+  router.all('/recording-status', async (req, res) => {
+    console.log('🎙️ /twilio/recording-status HIT');
+
+    const orderId = req.query.orderId || req.body?.orderId;
+    const callId = req.query.callId || req.body?.callId;
+    const callSid = req.body?.CallSid || req.query?.CallSid;
+    const recordingUrl = req.body?.RecordingUrl || req.query?.RecordingUrl;
+    const recordingSid = req.body?.RecordingSid || req.query?.RecordingSid;
+    const recordingStatus = req.body?.RecordingStatus || req.query?.RecordingStatus;
+
+    console.log(`🎙️ [Twilio:Recording] Status: ${recordingStatus}, Sid: ${recordingSid}, Url: ${recordingUrl}, CallId: ${callId}, CallSid: ${callSid}`);
+
+    const effectiveRecordingUrl = recordingUrl || (recordingSid && process.env.TWILIO_ACCOUNT_SID
+      ? `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Recordings/${recordingSid}`
+      : null);
+
+    if (effectiveRecordingUrl) {
+      try {
+        let call = null;
+        if (callId) {
+          call = await prisma.call.findUnique({ where: { id: String(callId) } });
+        }
+        if (!call && callSid) {
+          call = await prisma.call.findFirst({
+            where: { providerCallSid: String(callSid) },
+            orderBy: { createdAt: 'desc' }
+          });
+        }
+
+        if (call) {
+          await prisma.call.update({
+            where: { id: call.id },
+            data: { recordingUrl: effectiveRecordingUrl }
+          });
+
+          const { CallRecordingRetentionService } = await import('../services/callRecordingRetentionService.js');
+          await CallRecordingRetentionService.enforceRetention({ shopId: call.shopId });
+        }
+      } catch (err) {
+        console.error('❌ [Twilio:Recording] Failed to process recording status:', err.message);
+      }
+    }
+
+    return res.sendStatus(200);
+  });
+
   return router;
 }

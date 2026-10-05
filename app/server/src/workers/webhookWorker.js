@@ -127,6 +127,17 @@ export async function processWebhookJob(job) {
         }
       });
 
+      // Outbound WhatsApp Order Confirmation Message
+      try {
+        const { WhatsAppOrderMessageService } = await import('../services/whatsappOrderMessageService.js');
+        await WhatsAppOrderMessageService.sendOrderConfirmationMessage({
+          order: orderRecord,
+          shop: shopRecord
+        });
+      } catch (waMsgErr) {
+        console.warn('⚠️ [WebhookWorker] WhatsApp order message notice:', waMsgErr.message);
+      }
+
       return { success: true, orderId, queued: true };
     } else if (eligibility.reason === 'OUTSIDE_OPERATING_HOURS' && eligibility.canScheduleLater) {
       // Order placed outside operating hours: Schedule call for store opening

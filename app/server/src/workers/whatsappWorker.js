@@ -116,70 +116,84 @@ export async function processWhatsAppJob(job) {
   });
 
   // ========================================================
-  // 5. Call Python AI Engine (5-Second Timeout Protection)
+  // 5. Process AI Message (External Engine or Native "Zara" Agent)
   // ========================================================
-  const AI_ENGINE_URL = (process.env.AI_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-  const AI_ENGINE_API_KEY = process.env.AI_ENGINE_API_KEY || '';
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-  let aiResult = null;
+  let replyText = null;
+  let agentName = 'Zara';
+  let intent = 'GENERAL';
+  let action = null;
+  let externalEngineSuccess = false;
   const startTime = Date.now();
 
-  try {
-    waLogger.aiRequestStart(traceId, { url: `${AI_ENGINE_URL}/chat`, shopId, phone });
+  const AI_ENGINE_URL = process.env.AI_ENGINE_URL || (process.env.NODE_ENV === 'test' ? 'http://127.0.0.1:8000' : null);
 
-    const response = await fetch(`${AI_ENGINE_URL}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(AI_ENGINE_API_KEY ? { 'X-AI-ENGINE-KEY': AI_ENGINE_API_KEY } : {})
-      },
-      body: JSON.stringify({
-        shop_id: shopId,
-        customer_phone: phone,
-        message: messageText
-      }),
-      signal: controller.signal
-    });
+  if (AI_ENGINE_URL && !process.env.DISABLE_EXTERNAL_AI_ENGINE) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      waLogger.aiRequestStart(traceId, { url: `${AI_ENGINE_URL}/chat`, shopId, phone });
 
-    clearTimeout(timeoutId);
-
-    if (response.ok) {
-      aiResult = await response.json();
-      const latencyMs = Date.now() - startTime;
-      waLogger.aiResponseReceived(traceId, {
-        agent: aiResult.agent,
-        intent: aiResult.intent,
-        confidence: aiResult.confidence,
-        latencyMs
+      const response = await fetch(`${AI_ENGINE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.AI_ENGINE_API_KEY ? { 'X-AI-ENGINE-KEY': process.env.AI_ENGINE_API_KEY } : {})
+        },
+        body: JSON.stringify({
+          shop_id: shopId,
+          customer_phone: phone,
+          message: messageText
+        }),
+        signal: controller.signal
       });
-    } else {
-      // HTTP 5xx or server failure from AI engine is a recoverable error
-      throw new Error(`AI Engine HTTP ${response.status}: ${response.statusText}`);
-    }
-  } catch (apiErr) {
-    clearTimeout(timeoutId);
-    const isTimeout = apiErr.name === 'AbortError';
-    const errMessage = isTimeout ? 'AI Engine timeout exceeded 5000ms' : apiErr.message;
-    waLogger.failed(traceId, { error: errMessage, recoverable: true });
 
-    // Release message lock so retry attempt can execute
-    if (messageId) {
-      await MessageTrackerService.handleFailure(messageId, true);
-    }
+      clearTimeout(timeoutId);
 
-    // Recoverable error: throw so BullMQ applies exponential backoff retry policy
-    throw new Error(`[Recoverable AI Error] ${errMessage}`);
+      if (response.ok) {
+        const aiResult = await response.json();
+        replyText = (aiResult?.response || '').trim();
+        agentName = aiResult?.agent || 'support';
+        intent = aiResult?.intent || 'general';
+        externalEngineSuccess = true;
+        waLogger.aiResponseReceived(traceId, {
+          agent: agentName,
+          intent,
+          confidence: aiResult?.confidence || 0.9,
+          latencyMs: Date.now() - startTime
+        });
+      }
+    } catch (e) {
+      console.log(`ℹ️ [WhatsAppWorker] External AI engine unavailable (${e.message}). Routing to native WhatsAppAgentService ("Zara").`);
+    }
   }
 
-  // ========================================================
-  // 6. Send Reply via WhatsApp AKG (Tenant-Scoped Session)
-  // ========================================================
-  const replyText = (aiResult?.response || '').trim();
-  if (replyText) {
-    // Multi-tenant client instantiated strictly with the tenant's sessionId
+  if (!externalEngineSuccess) {
+    try {
+      const { WhatsAppAgentService } = await import('../services/whatsappAgentService.js');
+      const agentResult = await WhatsAppAgentService.handleIncomingMessage({
+        shopId,
+        shopDomain,
+        sessionId,
+        fromPhone: jid,
+        messageText,
+        messageId
+      });
+
+      agentName = 'Zara';
+      intent = agentResult?.intent || 'GENERAL';
+      action = agentResult?.action || null;
+      replyText = agentResult?.replyText;
+
+      waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText?.length || 0 });
+    } catch (agentErr) {
+      waLogger.failed(traceId, { error: `WhatsApp Agent failed: ${agentErr.message}`, recoverable: true });
+      if (messageId) {
+        await MessageTrackerService.handleFailure(messageId, true);
+      }
+      throw new Error(`[Recoverable WhatsApp Agent Error] ${agentErr.message}`);
+    }
+  } else if (replyText) {
+    // Send external engine reply via WhatsApp AKG
     const waClient = new WhatsAppClient({
       baseUrl: process.env.WA_AKG_BASE_URL,
       apiKey: process.env.WA_AKG_API_KEY,
@@ -194,13 +208,9 @@ export async function processWhatsAppJob(job) {
       waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText.length });
     } catch (waErr) {
       waLogger.failed(traceId, { error: `WA-AKG delivery failed: ${waErr.message}`, recoverable: true });
-
-      // Release message lock so retry attempt can execute
       if (messageId) {
         await MessageTrackerService.handleFailure(messageId, true);
       }
-
-      // Recoverable error: throw so BullMQ retries
       throw new Error(`[Recoverable WA-AKG Error] ${waErr.message}`);
     }
   }
@@ -216,7 +226,8 @@ export async function processWhatsAppJob(job) {
     success: true,
     messageId,
     traceId,
-    agent: aiResult?.agent,
-    intent: aiResult?.intent
+    agent: agentName,
+    intent: intent,
+    action: action
   };
 }

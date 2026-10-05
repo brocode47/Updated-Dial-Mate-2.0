@@ -210,6 +210,7 @@ export class CallWorkflowService {
         const orderNumber = order.orderNumber || (payload?.order_number ? String(payload.order_number) : order.id.slice(0, 6));
         const voiceUrl = `${appUrl}/twilio/voice?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&name=${encodeURIComponent(customerName)}&product=${encodeURIComponent(productName)}&price=${encodeURIComponent(productPrice)}&orderNumber=${encodeURIComponent(orderNumber)}`;
         const statusCallbackUrl = `${appUrl}/twilio/status?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&shop=${encodeURIComponent(shop.domain)}`;
+        const recordingStatusCallbackUrl = `${appUrl}/twilio/recording-status?orderId=${encodeURIComponent(order.id)}&callId=${encodeURIComponent(callRecord.id)}&shop=${encodeURIComponent(shop.domain)}`;
 
         console.log(`🔗 [CallWorkflow: LIVE] Dialing Twilio from ${fromNumber} to ${phone} (Mode: ${callMode})`);
         const call = await twilioClient.calls.create({
@@ -218,7 +219,10 @@ export class CallWorkflowService {
           url: voiceUrl,
           statusCallback: statusCallbackUrl,
           statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-          statusCallbackMethod: 'POST'
+          statusCallbackMethod: 'POST',
+          record: 'record-from-answer',
+          recordingStatusCallback: recordingStatusCallbackUrl,
+          recordingStatusCallbackMethod: 'POST'
         });
 
         providerCallSid = call.sid;
@@ -395,6 +399,15 @@ export class CallWorkflowService {
           transcript: formattedTranscript
         }
       }).catch(err => console.warn('Could not update call row:', err.message));
+    }
+
+    if (recordingUrl) {
+      try {
+        const { CallRecordingRetentionService } = await import('./callRecordingRetentionService.js');
+        await CallRecordingRetentionService.enforceRetention({ shopId: shop.id });
+      } catch (retentionErr) {
+        console.warn('⚠️ [CallWorkflow] Call recording retention error:', retentionErr.message);
+      }
     }
 
     // Read store settings for retries and fallback
