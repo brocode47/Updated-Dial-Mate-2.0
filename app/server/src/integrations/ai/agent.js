@@ -141,7 +141,14 @@ export class Agent {
     this.recordTurn('user', text);
     if (!this.session) return;
     try {
-      this.session.sendRealtimeInput({ text });
+      if (typeof this.session.sendClientContent === 'function') {
+        this.session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turnComplete: true
+        });
+      } else if (typeof this.session.sendRealtimeInput === 'function') {
+        this.session.sendRealtimeInput({ text });
+      }
     } catch (err) {
       console.warn('⚠️ Error sending text to Gemini Live:', err.message);
     }

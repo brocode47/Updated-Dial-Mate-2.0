@@ -33,11 +33,13 @@ export { mockSendMessage, mockDownloadMedia, mockSendMessageAI, mockGetHistory }
 
 vi.mock('../src/integrations/whatsapp/client.js', () => {
   return {
-    WhatsAppClient: vi.fn().mockImplementation(() => ({
-      sendMessage: async (...args) => mockSendMessage(...args),
-      downloadMedia: async (...args) => mockDownloadMedia(...args),
-      _formatJid: (jid) => jid
-    }))
+    WhatsAppClient: vi.fn().mockImplementation(function () {
+      return {
+        sendMessage: async (...args) => mockSendMessage(...args),
+        downloadMedia: async (...args) => mockDownloadMedia(...args),
+        _formatJid: (jid) => jid
+      };
+    })
   };
 });
 

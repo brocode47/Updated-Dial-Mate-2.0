@@ -127,71 +127,27 @@ export function twilioRouter() {
               return;
             }
 
+            const { BusinessGroundingService } = await import('../services/businessGroundingService.js');
             const { CallScriptEngine } = await import('../services/callScriptEngine.js');
-            const shopName = order.shop.name || order.shop.domain.replace('.myshopify.com', '');
-            const customerName = params.customerName || (order.customerFirstName ? `${order.customerFirstName} ${order.customerLastName || ''}`.trim() : 'Customer');
-            const productName = params.productName || order.lineItemsSummary || 'Store Items';
-            const productPrice = params.productPrice || (order.totalPrice ? String(order.totalPrice) : '0');
-            const orderNumber = params.orderNumber || order.orderNumber || '';
 
-            // Extract rich factual data for grounding
-            let lineItems = [];
-            let shippingAddress = null;
-            let subtotalPrice = null;
-            let shippingPrice = null;
+            // Build factual business context and strictly sanitize for tenant domain
+            const rawContext = BusinessGroundingService.buildBusinessContext({
+              order,
+              shop: order.shop,
+              customer: order.customer
+            });
 
-            if (order.payload) {
-              try {
-                const parsed = typeof order.payload === 'string' ? JSON.parse(order.payload) : order.payload;
-                if (Array.isArray(parsed.line_items) && parsed.line_items.length > 0) {
-                  lineItems = parsed.line_items.map(item => ({
-                    title: item.title || item.name,
-                    variantTitle: item.variant_title || '',
-                    quantity: item.quantity || 1,
-                    price: item.price ? String(item.price) : ''
-                  }));
-                }
-                if (parsed.shipping_address) {
-                  shippingAddress = [
-                    parsed.shipping_address.address1,
-                    parsed.shipping_address.address2,
-                    parsed.shipping_address.city,
-                    parsed.shipping_address.province,
-                    parsed.shipping_address.zip
-                  ].filter(Boolean).join(', ');
-                }
-                if (parsed.subtotal_price) subtotalPrice = String(parsed.subtotal_price);
-                if (parsed.total_shipping_price_set?.shop_money?.amount || parsed.shipping_lines?.[0]?.price) {
-                  shippingPrice = String(parsed.total_shipping_price_set?.shop_money?.amount || parsed.shipping_lines?.[0]?.price);
-                }
-              } catch (e) {
-                console.warn('Could not parse order payload for context:', e.message);
-              }
-            }
+            const sanitizedContext = BusinessGroundingService.sanitizeBusinessContext(rawContext, {
+              tenantDomain: order.shop.domain
+            });
 
-            let shopSettings = {};
-            if (order.shop?.settings) {
-              try {
-                shopSettings = typeof order.shop.settings === 'string' ? JSON.parse(order.shop.settings) : order.shop.settings;
-              } catch (_) {}
-            }
+            // Override customerName / orderNumber if passed explicitly in parameters
+            if (params.customerName) sanitizedContext.customerName = params.customerName;
+            if (params.orderNumber) sanitizedContext.orderNumber = params.orderNumber;
 
             const systemInstruction = CallScriptEngine.compileGeminiSystemInstruction({
               agentName: 'Zara',
-              shopName,
-              customerName,
-              orderNumber,
-              productName,
-              productPrice,
-              lineItems: lineItems.length ? lineItems : [{ title: productName, quantity: 1, price: productPrice }],
-              shippingAddress: shippingAddress || (order.customer ? [order.customer.city, order.customer.address].filter(Boolean).join(', ') : null),
-              subtotalPrice: subtotalPrice || productPrice,
-              shippingPrice: shippingPrice || '0',
-              totalPrice: productPrice,
-              paymentMethod: 'Cash on Delivery (COD)',
-              deliverySLA: shopSettings.deliverySLA || '3 to 5 working days',
-              openParcelPolicy: shopSettings.allowOpenParcel ? 'Allowed to inspect parcel before paying' : 'Courier policy does not permit opening parcel before payment',
-              returnPolicy: shopSettings.returnPolicy || '7-day easy exchange/return policy for damaged or defective items'
+              ...sanitizedContext
             });
 
             const { Agent } = await import('../integrations/ai/agent.js');
@@ -259,6 +215,11 @@ export function twilioRouter() {
                 }
               }
             });
+
+            const customerName = sanitizedContext.customerName;
+            const shopName = sanitizedContext.shopName;
+            const productName = sanitizedContext.productName;
+            const productPrice = sanitizedContext.totalPrice;
 
             const initialContext = `Order ID: ${orderId}, Customer: ${customerName}, Product: ${productName}, Price: ${productPrice}`;
             await agent.connect(initialContext);

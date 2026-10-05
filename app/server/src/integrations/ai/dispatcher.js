@@ -53,6 +53,23 @@ export const toolSchemas = {
 };
 
 /**
+ * Allowlist projection of an order record for tool responses.
+ * Tool results are sent to Gemini and logged, so they must NEVER carry the
+ * joined shop row (accessToken), internal call fields, or raw payloads.
+ */
+export function toSafeOrderResult(order) {
+  if (!order || typeof order !== 'object') return order;
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    totalAmount: order.totalAmount,
+    courierName: order.courierName ?? null,
+    expectedDelivery: order.expectedDelivery ?? null
+  };
+}
+
+/**
  * Dispatcher to securely execute AI tool calls inside a tenant context
  */
 export async function dispatchToolCall(shopDomain, toolName, args, context = {}) {
@@ -156,7 +173,7 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
       case 'confirm_order': {
         const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
         const updated = await stateMachine.transition(OrderStatus.CONFIRMED);
-        return { success: true, data: updated };
+        return { success: true, data: toSafeOrderResult(updated) };
       }
       case 'cancel_order': {
         const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
@@ -168,12 +185,12 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
         } catch (e) {
           console.warn(`Could not cancel via API (maybe already canceled): ${e.message}`);
         }
-        return { success: true, data: updated };
+        return { success: true, data: toSafeOrderResult(updated) };
       }
       case 'add_order_tag': {
         const sId = await getShopifyId(validatedArgs.orderId);
-        const order = await ordersApi.addOrderTag(shopDomain, sId, validatedArgs.tag);
-        return { success: true, data: order };
+        await ordersApi.addOrderTag(shopDomain, sId, validatedArgs.tag);
+        return { success: true, data: { tagged: true, tag: validatedArgs.tag } };
       }
       case 'schedule_callback': {
         const order = await prisma.order.findUnique({ where: { id: validatedArgs.orderId }, include: { shop: true } });
@@ -224,7 +241,7 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
           success: true,
           transferred: true,
           reason: validatedArgs.reason,
-          data: updated
+          data: toSafeOrderResult(updated)
         };
       }
       default:
