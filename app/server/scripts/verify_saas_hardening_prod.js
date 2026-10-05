@@ -8,7 +8,7 @@
  * 5. WA-AKG Baileys live session connectivity ('2cmrlo')
  */
 
-import { prisma } from '../src/db/prisma.js';
+import { prisma } from '../src/lib/db.js';
 import { CallRecordingRetentionService } from '../src/services/callRecordingRetentionService.js';
 import { WhatsAppOrderMessageService } from '../src/services/whatsappOrderMessageService.js';
 import { WhatsAppAgentService } from '../src/services/whatsappAgentService.js';
