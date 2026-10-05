@@ -147,14 +147,18 @@ export class WhatsAppClient {
   async checkSessionStatus(sessionId = null) {
     if (!this.apiKey) return { status: 'UNCONFIGURED' };
     const targetSession = this._resolveSessionId({ sessionId });
-    const url = `${this.baseUrl}/api/sessions/${targetSession}/status`;
+    const url = `${this.baseUrl}/api/sessions/${targetSession}`;
 
     try {
       const response = await axios.get(url, {
         headers: { 'x-api-key': this.apiKey },
         timeout: 5000
       });
-      return response.data || { status: 'CONNECTED' };
+      const sessionData = response.data?.data || response.data;
+      return {
+        status: sessionData?.status || (response.data?.status === true ? 'CONNECTED' : 'DISCONNECTED'),
+        data: sessionData
+      };
     } catch (error) {
       return {
         status: 'DISCONNECTED',
