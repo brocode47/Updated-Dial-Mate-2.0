@@ -195,21 +195,54 @@ export class ShopifyCatalogService {
       'the', 'a', 'an', 'and', 'or', 'for', 'is', 'are', 'in', 'of', 'to', 'with'
     ]);
 
+    const PAKISTANI_SYNONYMS = {
+      'kursi': ['chair'],
+      'kursiyan': ['chair', 'chairs'],
+      'kursiyo': ['chair', 'chairs'],
+      'kursiyon': ['chair', 'chairs'],
+      'chairs': ['chair'],
+      'covers': ['cover'],
+      'protectors': ['protector', 'protect', 'protection'],
+      'protection': ['protector', 'protect', 'cover'],
+      'kharrate': ['snoring', 'anti-snoring'],
+      'kharate': ['snoring', 'anti-snoring'],
+      'kharaton': ['snoring', 'anti-snoring'],
+      'naak': ['nasal', 'nose'],
+      'chashma': ['glasses', 'spectacles'],
+      'jootay': ['shoes'],
+      'joote': ['shoes'],
+      'kapray': ['clothes'],
+      'kapre': ['clothes'],
+      'pankha': ['fan'],
+      'darwaza': ['door'],
+      'dewar': ['wall'],
+      'deewar': ['wall']
+    };
+
     const tokens = rawQuery
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, ' ')
       .split(/\s+/)
       .filter(t => t.length > 1 && !stopWords.has(t));
 
-    const searchTokens = tokens.length > 0 ? tokens : [rawQuery.toLowerCase()];
+    const expandedTokens = new Set(tokens);
+    for (const t of tokens) {
+      if (PAKISTANI_SYNONYMS[t]) {
+        for (const syn of PAKISTANI_SYNONYMS[t]) {
+          expandedTokens.add(syn);
+        }
+      }
+    }
+
+    const searchTokens = expandedTokens.size > 0 ? Array.from(expandedTokens) : [rawQuery.toLowerCase()];
     const queryLower = rawQuery.toLowerCase();
     const scored = [];
 
     for (const p of allProducts) {
       const titleLower = p.title.toLowerCase();
       const descLower = (p.description || '').toLowerCase();
-      const tagsLower = p.tags.toLowerCase();
-      const typeLower = p.productType.toLowerCase();
+      const tagsLower = (p.tags || '').toLowerCase();
+      const typeLower = (p.productType || '').toLowerCase();
 
       let score = 0;
 

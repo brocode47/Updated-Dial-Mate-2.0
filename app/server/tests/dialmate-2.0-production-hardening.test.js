@@ -11,6 +11,9 @@ import { WhatsAppClient } from '../src/integrations/whatsapp/client.js';
 describe('Dial Mate 2.0 — Production-Grade WhatsApp AI Agent (Zara) Hardening Suite', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    if (prisma.complianceLog) {
+      vi.spyOn(prisma.complianceLog, 'create').mockResolvedValue({});
+    }
   });
 
   afterEach(() => {

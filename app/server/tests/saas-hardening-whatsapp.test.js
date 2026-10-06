@@ -493,6 +493,7 @@ describe('Dial Mate 2.0 — Production SaaS Hardening & WhatsApp Customer Agent'
       vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
       vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({ id: 'ord-human', orderNumber: '1058' });
       vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.conversation, 'update').mockResolvedValue({});
       vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
 
       const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({ success: true });

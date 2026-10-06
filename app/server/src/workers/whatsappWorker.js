@@ -85,6 +85,7 @@ export async function processWhatsAppJob(job) {
 
   // Inbound Voice Note Processing: retrieve audio & transcribe with Gemini
   if (mediaInfo.isMedia && mediaInfo.mediaType === 'audio') {
+    console.log(`🎙️ [WhatsApp:VOICE_IN] Received voice note ${messageId} from ${jid}`);
     try {
       const waClient = new WhatsAppClient({
         baseUrl: process.env.WA_AKG_BASE_URL,
@@ -101,6 +102,7 @@ export async function processWhatsAppJob(job) {
         );
         if (transcript) {
           messageText = transcript;
+          console.log(`📝 [WhatsApp:TRANSCRIPTION] Transcribed audio ${messageId}: "${transcript}"`);
         }
       }
     } catch (audioErr) {

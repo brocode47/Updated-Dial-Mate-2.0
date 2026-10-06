@@ -177,8 +177,8 @@ export class ConversationStateService {
       return p;
     }
 
-    // 2. Direct Pronoun References ("iska", "iski", "is ka", "is ki", "ye wala", "yeh wala", "uska", "uski", "woh wala")
-    if (/\b(iska|iski|is\s*ki|is\s*ka|ye\s*wala|yeh\s*wala|uska|uski|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala)\b/i.test(clean)) {
+    // 2. Direct Pronoun References ("iski", "iska", "is ki", "is ka", "iss ki", "iss ka", "yeh", "ye", "this", "that", "item", "product", etc.)
+    if (/\b(iska|iski|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh)\b/i.test(clean)) {
       const p = current || products[0] || null;
       if (p) {
         await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });

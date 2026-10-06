@@ -103,6 +103,7 @@ export class HumanEscalationService {
     // 2. Shop settings
     if (settings.supportWhatsapp) return settings.supportWhatsapp;
     if (settings.supportPhone) return settings.supportPhone;
+    if (settings.operatorPhone) return settings.operatorPhone;
     if (settings.escalationNumber && !settings.escalationNumber.includes('1234567')) {
       return settings.escalationNumber;
     }
