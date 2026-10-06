@@ -110,14 +110,106 @@ export class ConversationStateService {
   }
 
   /**
-   * Resolves currently active product from conversation state
+   * Returns true when the product has been rejected/dismissed by the customer
+   */
+  static isRejected(state, product) {
+    if (!product) return false;
+    const key = product.id || product.title;
+    return (state.rejectedProducts || []).some(r => (r.id || r.title) === key);
+  }
+
+  /**
+   * Resolves currently active product from conversation state.
+   * Rejected/dismissed products are never active.
    * 
    * @param {string} conversationId 
    * @returns {Promise<object|null>}
    */
   static async resolveActiveProduct(conversationId) {
     const state = await this.getState(conversationId);
-    return state.currentProduct || state.lastReferencedProduct || (state.lastProducts && state.lastProducts[0]) || null;
+    const candidates = [
+      state.currentProduct,
+      state.lastReferencedProduct,
+      ...((state.lastProducts || []).slice(0, 1))
+    ];
+    return candidates.find(p => p && !this.isRejected(state, p)) || null;
+  }
+
+  /**
+   * Marks the given product (default: current product) as REJECTED and removes it
+   * from the active context. It is only re-activated if the customer asks for it again.
+   *
+   * @returns {Promise<object|null>} the rejected product
+   */
+  static async rejectProduct(conversationId, product = null) {
+    if (!conversationId) return null;
+    const state = await this.getState(conversationId);
+    const target = product || state.currentProduct || state.lastReferencedProduct || null;
+    const rejected = state.rejectedProducts || [];
+    if (target && !this.isRejected(state, target)) {
+      rejected.push({ id: target.id, title: target.title, rejectedAt: Date.now() });
+    }
+    await this.clearActiveProduct(conversationId, {
+      rejectedProducts: rejected,
+      productInterestState: target ? 'REJECTED' : (state.productInterestState || null),
+      lastProducts: (state.lastProducts || []).filter(p => !target || (p.id || p.title) !== (target.id || target.title))
+    });
+    return target;
+  }
+
+  /**
+   * Re-activates a previously rejected product (customer explicitly asked for it again)
+   */
+  static async unrejectProduct(conversationId, product) {
+    if (!conversationId || !product) return;
+    const state = await this.getState(conversationId);
+    const key = product.id || product.title;
+    await this.updateState(conversationId, {
+      rejectedProducts: (state.rejectedProducts || []).filter(r => (r.id || r.title) !== key)
+    });
+  }
+
+  /**
+   * Clears the active product context (updateState cannot null out a product because it
+   * merges with the previous value, so this writes the state directly).
+   */
+  static async clearActiveProduct(conversationId, extra = {}) {
+    if (!conversationId) return {};
+    const current = await this.getState(conversationId);
+    const updated = {
+      ...current,
+      ...extra,
+      currentProduct: null,
+      lastReferencedProduct: null,
+      productInterestState: extra.productInterestState || null,
+      recentTopic: current.recentTopic === 'product' ? null : current.recentTopic,
+      lastActivityTimestamp: Date.now(),
+      updatedAt: Date.now()
+    };
+    try {
+      if (redis && redis.status === 'ready') {
+        await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+      }
+    } catch (_) {}
+    memoryStore.set(conversationId, updated);
+    return updated;
+  }
+
+  /**
+   * Human escalation is an EVENT, not a terminal state. These helpers record that the
+   * human team was notified so the owner is not re-notified on every message, while the
+   * conversation stays active.
+   */
+  static async hasRecentHumanEscalation(conversationId, windowMs = 30 * 60 * 1000) {
+    const state = await this.getState(conversationId);
+    const at = state.humanEscalation?.notifiedAt;
+    return Boolean(at && Date.now() - at < windowMs);
+  }
+
+  static async markHumanEscalation(conversationId, details = {}) {
+    await this.updateState(conversationId, {
+      humanEscalation: { requested: true, notificationSent: details.notificationSent !== false, notifiedAt: Date.now(), ...details }
+    });
   }
 
   /**
@@ -147,57 +239,49 @@ export class ConversationStateService {
     const clean = String(text || '').toLowerCase().trim();
 
     // 1. Ordinal References
-    if (/\b(pehle|pehla|1st|first|one|number\s*1|1\s*number)\b/i.test(clean) && products[0]) {
-      const p = products[0];
-      await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
-      return p;
-    }
-
-    if (/\b(doosre|doosra|dusra|dusre|2nd|second|two|number\s*2|2\s*number)\b/i.test(clean) && products[1]) {
-      const p = products[1];
-      await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
-      return p;
-    }
-
-    if (/\b(teesre|teesra|tisra|3rd|third|three|number\s*3|3\s*number)\b/i.test(clean) && products[2]) {
-      const p = products[2];
-      await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
-      return p;
-    }
-
-    if (/\b(chothe|chotha|4th|fourth|four|number\s*4|4\s*number)\b/i.test(clean) && products[3]) {
-      const p = products[3];
-      await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
-      return p;
-    }
-
-    if (/\b(paanchwe|paanchwa|panchwa|5th|fifth|five|number\s*5|5\s*number)\b/i.test(clean) && products[4]) {
-      const p = products[4];
-      await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
-      return p;
+    const ordinalMatches = [
+      { pattern: /\b(pehle|pehla|1st|first|one|number\s*1|1\s*number)\b/i, index: 0 },
+      { pattern: /\b(doosre|doosra|dusra|dusre|2nd|second|two|number\s*2|2\s*number)\b/i, index: 1 },
+      { pattern: /\b(teesre|teesra|tisra|3rd|third|three|number\s*3|3\s*number)\b/i, index: 2 },
+      { pattern: /\b(chothe|chotha|4th|fourth|four|number\s*4|4\s*number)\b/i, index: 3 },
+      { pattern: /\b(paanchwe|paanchwa|panchwa|5th|fifth|five|number\s*5|5\s*number)\b/i, index: 4 }
+    ];
+    for (const om of ordinalMatches) {
+      if (om.pattern.test(clean) && products[om.index]) {
+        const p = products[om.index];
+        await this.unrejectProduct(conversationId, p);
+        await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
+        return p;
+      }
     }
 
     // 2. Direct Pronoun References ("iski", "iska", "is ki", "is ka", "iss ki", "iss ka", "yeh", "ye", "this", "that", "item", "product", etc.)
     if (/\b(iska|iski|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh)\b/i.test(clean)) {
-      const p = current || products[0] || null;
-      if (p) {
-        await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
+      const candidate = (current && !this.isRejected(state, current))
+        ? current
+        : products.find(p => !this.isRejected(state, p)) || null;
+      if (candidate) {
+        await this.updateState(conversationId, { currentProduct: candidate, lastReferencedProduct: candidate, recentTopic: 'product' });
       }
-      return p;
+      return candidate;
     }
 
-    // 3. Name fragment matching within recent products
+    // 3. Name fragment matching within recent products (explicitly unrejects if named)
     if (products.length > 0) {
       for (const p of products) {
-        const words = p.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const words = (p.title || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
         if (words.some(w => clean.includes(w))) {
+          await this.unrejectProduct(conversationId, p);
           await this.updateState(conversationId, { currentProduct: p, lastReferencedProduct: p, recentTopic: 'product' });
           return p;
         }
       }
     }
 
-    return current || products[0] || null;
+    const fallback = (current && !this.isRejected(state, current))
+      ? current
+      : products.find(p => !this.isRejected(state, p)) || null;
+    return fallback;
   }
 }
 

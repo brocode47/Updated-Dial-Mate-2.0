@@ -624,4 +624,169 @@ describe('Dial Mate 2.0 — Product Context & Voice Reply Regression Suite', () 
       expect(res.replyText).not.toContain('transfer kar rahi hoon');
     });
   });
+
+  // =========================================================================
+  // 25-29: Human Escalation Continuity & Product Rejection Lifecycle
+  // =========================================================================
+  describe('Human Escalation Continuity & Product Rejection Lifecycle (Requirements 25-29)', () => {
+    it('25. human escalation does NOT end conversation: subsequent message is handled by Zara', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      const sendSpy = vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+      vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({ success: true, notificationSent: true });
+
+      const conv = { id: 'conv-cont-1', isTakeover: false, messages: [] };
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue(conv);
+
+      // Turn 1: Customer asks for human support
+      const turn1 = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'mujhe real person se baat karni hai'
+      });
+
+      expect(turn1.success).toBe(true);
+      expect(turn1.action).toBe('request_human_transfer');
+      expect(turn1.replyText).toContain('human support team ko inform kar diya hai');
+      // Must NOT set isTakeover
+      expect(conv.isTakeover).toBe(false);
+
+      // Turn 2: Customer asks product price immediately after
+      await ConversationStateService.updateState('conv-cont-1', { currentProduct: mockProductChair });
+      const turn2 = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'acha chair protection cover ki price batao'
+      });
+
+      expect(turn2.success).toBe(true);
+      expect(turn2.handledByHuman).not.toBe(true);
+      expect(turn2.replyText).toContain('Rs. 499');
+      expect(sendSpy).toHaveBeenCalled();
+    });
+
+    it('26. informational question mentioning owner is NOT classified as human transfer', () => {
+      const detected1 = WhatsAppAgentService.detectIntent('Tumhare owner ka naam kya hai', {});
+      expect(detected1.intent).not.toBe('HUMAN_TRANSFER');
+
+      const detected2 = WhatsAppAgentService.detectIntent('owner ka number do', {});
+      // Even if asking number/info, verify explicit human transfer requires connecting/talking
+      const detected3 = WhatsAppAgentService.detectIntent('owner se baat karwao', {});
+      expect(detected3.intent).toBe('HUMAN_TRANSFER');
+    });
+
+    it('27. repeat escalation within notification window sends polite reassurance without duplicate alert', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-repeat-esc', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+      const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({ success: true });
+
+      // Mark that human escalation was already notified 2 minutes ago
+      await ConversationStateService.markHumanEscalation('conv-repeat-esc', {
+        notificationSent: true,
+        notifiedAt: Date.now() - 2 * 60 * 1000
+      });
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'kisi bande se baat karwao please'
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.action).toBe('human_transfer_already_notified');
+      expect(res.replyText).toContain('pehle hi bhej di gayi hai');
+      // Tool dispatcher should NOT be called again
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('28. product rejection ("nahi chahiye", "rehne do") removes product from active context', async () => {
+      const mockProductBrush = {
+        id: 'prod-brush-1',
+        title: '19L Water Bottle Cleaning Brush',
+        price: 'Rs. 799',
+        formattedPrice: 'Rs. 799',
+        numericPrice: 799
+      };
+
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-reject-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      // Set active product
+      await ConversationStateService.updateState('conv-reject-1', {
+        currentProduct: mockProductBrush,
+        lastProducts: [mockProductBrush, mockProductChair]
+      });
+
+      // Customer rejects product
+      const resReject = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'nahi chahiye ye product'
+      });
+
+      expect(resReject.intent).toBe('PRODUCT_REJECTION');
+      expect(resReject.action).toBe('product_rejected');
+      expect(resReject.replyText).toContain('Theek hai, koi baat nahi');
+
+      // State check: activeProduct must now be null (or next non-rejected item, NOT the rejected brush)
+      const activeProd = await ConversationStateService.resolveActiveProduct('conv-reject-1');
+      expect(activeProd?.id).not.toBe(mockProductBrush.id);
+
+      // Rejection does not cancel an order
+      expect(resReject.intent).not.toBe('CANCEL');
+    });
+
+    it('29. voice note after human escalation is answered with voice reply', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-voice-post-esc', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+
+      const mediaSpy = vi.spyOn(WhatsAppClient.prototype, 'sendMediaMessage').mockResolvedValue({ status: true });
+      const textSpy = vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      vi.spyOn(TextToSpeechService, 'synthesize').mockResolvedValue({
+        success: true,
+        buffer: Buffer.from('RIFF mock wav audio data'),
+        format: 'audio/ogg',
+        durationSeconds: 3.1
+      });
+
+      await ConversationStateService.markHumanEscalation('conv-voice-post-esc', { notifiedAt: Date.now() - 60000 });
+      await ConversationStateService.updateState('conv-voice-post-esc', { currentProduct: mockProductChair });
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'delivery charges kitne hain?',
+        isVoiceInbound: true
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.handledByHuman).not.toBe(true);
+      expect(mediaSpy).toHaveBeenCalledTimes(1);
+      expect(textSpy).not.toHaveBeenCalled();
+    });
+  });
 });

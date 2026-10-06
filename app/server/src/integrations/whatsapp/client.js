@@ -125,6 +125,26 @@ export class WhatsAppClient {
     }
 
     const sessionId = this._resolveSessionId(options);
+
+    // If a direct fileUrl is available from webhook metadata, try it first
+    if (options.fileUrl) {
+      const directUrl = options.fileUrl.startsWith('http')
+        ? options.fileUrl
+        : `${this.baseUrl}${options.fileUrl.startsWith('/') ? '' : '/'}${options.fileUrl}`;
+      try {
+        const response = await axios.get(directUrl, {
+          headers: { 'x-api-key': this.apiKey },
+          responseType: 'arraybuffer',
+          timeout: this.timeout
+        });
+        if (response.data && response.data.length > 0) {
+          return response.data;
+        }
+      } catch (directErr) {
+        console.warn(`⚠️ [WhatsAppClient] direct fileUrl fetch failed (${directErr.message}), falling back to download route.`);
+      }
+    }
+
     const url = `${this.baseUrl}/api/messages/${sessionId}/download/${messageId}/media`;
 
     try {

@@ -101,13 +101,31 @@ export class WhatsAppAgentService {
       return { intent: 'CANCEL', confidence: 0.99 };
     }
 
-    // 2. Human escalation request
+    // 2. Human escalation request (an explicit request to reach a person — merely mentioning
+    //    "owner" in an informational question, e.g. "owner ka naam kya hai", is NOT an escalation)
+    const personWord = '(human|insan|insaan|real\\s*(person|banda|insan)|asli\\s*banda|banda|bande|bandey|bandy|agent|representative|operator|owner|manager|customer\\s*(support|care|service)|support(\\s*(team|staff))?|staff)';
     if (
-      /\b(human|agent|operator|representative|insan|asli banda|real person|real banda|call back|rabta|support team|customer support|owner)\b/i.test(clean) ||
-      /(kisi\s*(insan|bande|person)|real\s*(person|banda|insan)|human\s*(se|support)|owner\s*(se|ko)|customer\s*support|agent\s*(se|ko)|representative\s*(se|ko)|bande\s*se\s*baat)/i.test(clean) ||
-      /(mujhe\s*(kisi\s*)?(insan|owner|bande|agent|support)\s*se\s*baat|transfer\s*karo|connect\s*karo)/i.test(clean)
+      new RegExp(`(kisi\\s*)?${personWord}\\s*(se|sy|say|ko)\\s*(baat|bat|bate|talk|connect|milao|milwao|rabta|call|bulao|transfer)`, 'i').test(clean) ||
+      new RegExp(`\\b(talk|speak|baat|connect|transfer)\\s*(to|with|karwao|karao|karo)?\\s*(a\\s*)?(kisi\\s*)?${personWord}\\b`, 'i').test(clean) ||
+      /\b(human|agent|insan|banda)\s*(chahiye|please|plz|bhejo|bulao)\b/i.test(clean) ||
+      /\b(human|live)\s*agent\b/i.test(clean) ||
+      /\b(real\s*(person|banda|insan)|asli\s*banda|call\s*back|transfer\s*karo|connect\s*karo|kisi\s*(insan|bande|person)\s*se)\b/i.test(clean) ||
+      /\b(support\s*team|customer\s*support)\s*(se|ko)\b/i.test(clean)
     ) {
       return { intent: 'HUMAN_TRANSFER', confidence: 0.95 };
+    }
+
+    // 2b. Product rejection / dismissal ("nahi chahiye", "rehne do", "choro", "no thanks"...).
+    //     Evaluated BEFORE cancel so that rejecting a PRODUCT can never cancel an ORDER.
+    const rejectionPhrase =
+      /\b(nahi|nahin|nhi|nai|no)\s*(chahiye|chahiyeh|chaiye|chahye|chahiay|lena|leni|lene|lunga|lungi|pasand)\b/i.test(clean) ||
+      /\b(rehne?\s*(do|dein|de)|reh\s*ne\s*do|rahne\s*do|chh?oro|chh?or\s*do|chodo|chhod\s*do|skip|no\s*thanks?|not\s*interested|don'?t\s*want|dont\s*want|no\s*need)\b/i.test(clean) ||
+      /\b(zarurat|zaroorat|zarorat)\s*(nahi|nhi|nahin)\b/i.test(clean) ||
+      /\b(ye|yeh|ise|isko|is)\s*(wala\s*)?(nahi|nhi)\b/i.test(clean) ||
+      clean === 'nahi' || clean === 'nahin' || clean === 'nhi' || clean === 'no';
+    const mentionsCancel = /\b(cancel|cancle|cancil|cancl|radd)\b/i.test(clean);
+    if (rejectionPhrase && !mentionsCancel && !this.hasExplicitOrderReference(clean)) {
+      return { intent: 'PRODUCT_REJECTION', confidence: 0.93 };
     }
 
     // 3. Negation checks before action matching
@@ -200,7 +218,7 @@ export class WhatsAppAgentService {
     }
 
     // 12. "Aur dikhao" / Pagination intent
-    if (/\b(aur\s*dikhao|aur\s*dikha|aur\s*bhejo|aur\s*batao|mazeed\s*dikhao|next\s*page|more\s*products|aur\s*items|aur\s*products|mazeed|agla)\b/i.test(clean) || clean === 'aur dikhao' || clean === 'more' || clean === 'or?' || clean === 'next') {
+    if (/\b(aur\s*dikhao|aur\s*dikha|aur\s*bhejo|aur\s*batao|koi\s*aur\s*(dikhao|dikha|batao|bhejo|product|item)|(doosra|dusra|doosri|dusri)\s*(dikhao|dikha|batao|product|item)|another\s*(one|product|item)|next\s*product|mazeed\s*dikhao|next\s*page|more\s*products|aur\s*items|aur\s*products|mazeed|agla)\b/i.test(clean) || clean === 'aur dikhao' || clean === 'more' || clean === 'or?' || clean === 'next') {
       return { intent: 'MORE', confidence: 0.95 };
     }
 
@@ -383,30 +401,40 @@ export class WhatsAppAgentService {
     // 7. Intent Execution & Deterministic Fast-Paths
     if (detected.intent === 'HUMAN_TRANSFER') {
       executedAction = 'request_human_transfer';
-      const escalationResult = await ToolDispatcher.dispatch('request_human_transfer', {
-        orderId: recentOrder?.orderId || null,
-        reason: 'Customer requested human support via WhatsApp'
-      }, {
-        shopDomain: shop.domain,
-        shopId: shop.id,
-        orderId: recentOrder?.orderId || null,
-        customerPhone: cleanPhone,
-        customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : null,
-        customerCity: mentionedCity || recentOrder?.shippingAddress || 'On file',
-        customerMessage: messageText,
-        conversationId: conversation.id,
-        activeProduct: candidateProduct,
-        productTitle: candidateProduct?.title || null,
-        orderNumber: recentOrder?.orderNumber || null
-      });
-
-      // Mark conversation as taken over
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { isTakeover: true }
-      }).catch(() => {});
-
-      replyText = `Maine hamari human support team ko inform kar diya hai. Hamari team aapse jald rabta karegi. Shukriya!`;
+      // Human escalation is an EVENT, not the end of the conversation. The owner is
+      // notified once per window; the conversation stays active so Zara keeps answering.
+      const alreadyEscalated = await ConversationStateService.hasRecentHumanEscalation(conversation.id);
+      if (alreadyEscalated) {
+        executedAction = 'human_transfer_already_notified';
+        replyText = `Aapki request hamari human support team ko pehle hi bhej di gayi hai, woh jald rabta karegi. Tab tak main aapki madad ke liye yahin hoon — aap kya poochna chahte hain?`;
+      } else {
+        const escalationResult = await ToolDispatcher.dispatch('request_human_transfer', {
+          orderId: recentOrder?.orderId || null,
+          reason: 'Customer requested human support via WhatsApp'
+        }, {
+          shopDomain: shop.domain,
+          shopId: shop.id,
+          orderId: recentOrder?.orderId || null,
+          customerPhone: cleanPhone,
+          customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : null,
+          customerCity: mentionedCity || recentOrder?.shippingAddress || 'On file',
+          customerMessage: messageText,
+          conversationId: conversation.id,
+          activeProduct: candidateProduct,
+          productTitle: candidateProduct?.title || null,
+          orderNumber: recentOrder?.orderNumber || null
+        });
+        await ConversationStateService.markHumanEscalation(conversation.id, {
+          notificationSent: escalationResult?.notificationSent !== false
+        });
+        replyText = `Maine hamari human support team ko inform kar diya hai. Hamari team aapse jald rabta karegi. Tab tak aap mujhse koi bhi sawal pooch sakte hain.`;
+      }
+    } else if (detected.intent === 'PRODUCT_REJECTION') {
+      executedAction = 'product_rejected';
+      const rejected = await ConversationStateService.rejectProduct(conversation.id, candidateProduct || null);
+      replyText = rejected
+        ? `Theek hai, koi baat nahi! Agar aap kuch aur dekhna chahein to product ka naam ya category bata dein, main madad kar deti hoon.`
+        : `Theek hai, koi baat nahi! Agar kuch aur chahiye ho to bata dein.`;
     } else if (detected.intent === 'ORDER_SUMMARY') {
       executedAction = 'order_summary_fastpath';
       await ConversationStateService.updateState(conversation.id, { recentTopic: 'order' });
@@ -683,7 +711,8 @@ Customer & Store Context:
 - Store: ${storeName}
 - Customer Phone: ${cleanPhone}
 ${recentOrder ? `- Order #${recentOrder.orderNumber} (Rs. ${recentOrder.totalAmount}) - Items: ${recentOrder.items} - Status: ${recentOrder.status}` : '- No active order.'}
-${activeProduct ? `- Active/Discussed Product: ${activeProduct.title} (${activeProduct.formattedPrice}) - Link: ${activeProduct.url}` : ''}
+${activeProduct ? `- Active/Discussed Product: ${activeProduct.title} (${activeProduct.formattedPrice}) - Link: ${activeProduct.url}` : '- No active product.'}
+${state.rejectedProducts && state.rejectedProducts.length > 0 ? `- Rejected / Dismissed Products (DO NOT mention or suggest these): ${state.rejectedProducts.map(p => p.title || p).join(', ')}` : ''}
 ${!shouldGreet ? '- NOTE: The conversation is ALREADY in progress. DO NOT start with greeting or say "Assalam-o-Alaikum! Main Zara hoon...". Answer directly.' : ''}
 
 CRITICAL OPERATING RULES:
@@ -703,8 +732,10 @@ CRITICAL OPERATING RULES:
 5. PURCHASE VS CONFIRMATION:
    If customer says "anti snoring wala product confirm kro" or wants to buy a product, assist with booking the product. Do NOT say "Mujhe aapka order nahi mila".
 6. HUMAN ASSISTANCE:
-   If customer requests a person, call 'request_human_transfer'. Say: "Ji, main ne aapki request customer support ko bhej di hai. Hamari team aapse jald rabta karegi." Do NOT claim live telephony connection.
-7. NEVER invent prices, discounts, or medical cures.`
+   If customer requests a person, call 'request_human_transfer'. Say: "Ji, main ne aapki request customer support ko bhej di hai. Hamari team aapse jald rabta karegi. Tab tak main aapki madad ke liye yahin hoon." Do NOT claim live telephony connection.
+7. NEVER invent prices, discounts, or medical cures.
+8. REJECTED / DISMISSED PRODUCTS:
+   If the customer said "nahi chahiye", "rehne do", "choro" or dismissed any product, NEVER recommend, mention, or append that product to future replies unless the customer explicitly asks for it again. Do NOT bring up unasked or rejected products.`
         );
 
         // Build prior history messages

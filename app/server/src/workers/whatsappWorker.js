@@ -93,7 +93,10 @@ export async function processWhatsAppJob(job) {
         sessionId: String(sessionId),
         shopId: String(shopId)
       });
-      const audioBuffer = await waClient.downloadMedia(messageId, { sessionId });
+      const audioBuffer = await waClient.downloadMedia(messageId, {
+        sessionId,
+        fileUrl: mediaInfo.metadata?.fileUrl
+      });
       if (audioBuffer && audioBuffer.length > 0) {
         const { AudioTranscriberService } = await import('../services/audioTranscriberService.js');
         const transcript = await AudioTranscriberService.transcribeAudio(

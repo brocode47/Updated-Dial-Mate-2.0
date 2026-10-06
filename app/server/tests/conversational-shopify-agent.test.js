@@ -6,6 +6,7 @@ import { ConversationStateService } from '../src/services/conversationStateServi
 import { WhatsAppAgentService } from '../src/services/whatsappAgentService.js';
 import { ToolDispatcher } from '../src/integrations/ai/dispatcher.js';
 import * as aiClientModule from '../src/integrations/ai/client.js';
+import { WhatsAppClient } from '../src/integrations/whatsapp/client.js';
 
 describe('Dial Mate 2.0 — Conversational Shopify Agent & Multi-Tenant Core', () => {
   beforeEach(() => {
@@ -635,15 +636,16 @@ describe('Dial Mate 2.0 — Conversational Shopify Agent & Multi-Tenant Core', (
       expect(result.replyText).toContain('aapka order cancel nahi kiya gaya');
     });
 
-    it('sets isTakeover: true on human escalation and silences AI completely on subsequent messages', async () => {
+    it('notifies human support on escalation without terminating conversation, but respects manual takeover', async () => {
       vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'sundaybazaaar.store' });
       vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '+923333255998' });
       vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-esc', isTakeover: false, messages: [] });
       vi.spyOn(PhoneNormalizer, 'resolveOrders').mockResolvedValue([]);
       const updateConvSpy = vi.spyOn(prisma.conversation, 'update').mockResolvedValue({});
-      vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({ success: true, transferred: true });
+      const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({ success: true, transferred: true });
       vi.spyOn(prisma.message, 'create').mockResolvedValue({});
       vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
 
       const result = await WhatsAppAgentService.handleIncomingMessage({
         shopId: 'shop-1',
@@ -655,12 +657,14 @@ describe('Dial Mate 2.0 — Conversational Shopify Agent & Multi-Tenant Core', (
 
       expect(result.success).toBe(true);
       expect(result.action).toBe('request_human_transfer');
-      expect(updateConvSpy).toHaveBeenCalledWith({
+      expect(dispatchSpy).toHaveBeenCalled();
+      // Human escalation is an event, NOT a terminal isTakeover lock
+      expect(updateConvSpy).not.toHaveBeenCalledWith({
         where: { id: 'conv-esc' },
         data: { isTakeover: true }
       });
 
-      // Subsequent message while takeover is true
+      // Subsequent message while manual takeover is true
       vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-esc', isTakeover: true, messages: [] });
       const subsequentResult = await WhatsAppAgentService.handleIncomingMessage({
         shopId: 'shop-1',

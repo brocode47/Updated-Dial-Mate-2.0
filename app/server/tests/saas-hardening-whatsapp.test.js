@@ -353,7 +353,7 @@ describe('Dial Mate 2.0 — Production SaaS Hardening & WhatsApp Customer Agent'
 
       expect(WhatsAppAgentService.detectIntent('2').intent).toBe('CANCEL');
       expect(WhatsAppAgentService.detectIntent('cancel kardo').intent).toBe('CANCEL');
-      expect(WhatsAppAgentService.detectIntent('mujhe nahi chahiye').intent).toBe('CANCEL');
+      expect(WhatsAppAgentService.detectIntent('mujhe nahi chahiye').intent).toBe('PRODUCT_REJECTION');
 
       // Negation safety intent routing
       expect(WhatsAppAgentService.detectIntent('cancel mat karna confirm kardo').intent).toBe('CONFIRM');
