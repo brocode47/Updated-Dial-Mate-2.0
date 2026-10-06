@@ -78,9 +78,20 @@ export const AITools = {
       required: ['reason']
     }
   },
+  get_delivery_quote: {
+    name: 'get_delivery_quote',
+    description: 'Obtain real delivery charges, shipping SLA timeline, and calculate total order price including delivery (e.g. when customer asks "delivery charges?", "shipping kitni hai?", "Karachi delivery?", "iski total price delivery ke sath"). Returns deliveryCharge, currency, estimatedDelivery, and source.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        city: { type: 'STRING', description: 'Customer city name if provided (e.g. Karachi, Lahore, Islamabad)' },
+        productPrice: { type: 'NUMBER', description: 'Optional product price to calculate total with delivery' }
+      }
+    }
+  },
   search_shopify_products: {
     name: 'search_shopify_products',
-    description: 'Search the store Shopify catalog for products when customer asks about products, catalog, or browsing (e.g. "chair protection cover", "leather belt", "kitchen items", "catalog dikhao"). Returns matching product titles, prices, descriptions, URLs, and stock availability.',
+    description: 'Search the store Shopify catalog for products when customer asks about products, catalog, or browsing (e.g. "chair protection cover", "leather belt", "kitchen items", "catalog dikhao"). Returns matching product titles, prices, descriptions, and storefront URLs.',
     parameters: {
       type: 'OBJECT',
       properties: {

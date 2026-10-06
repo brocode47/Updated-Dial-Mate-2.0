@@ -4,6 +4,7 @@ import { searchShopifyProducts } from '../shopify/products.js';
 import { ShopifyCatalogService } from '../../services/shopifyCatalogService.js';
 import { OrderStateMachine, OrderStatus } from '../../services/OrderStateMachine.js';
 import { HumanEscalationService } from '../../services/humanEscalationService.js';
+import { DeliveryService } from '../../services/deliveryService.js';
 import { prisma } from '../../lib/db.js';
 
 export const toolSchemas = {
@@ -50,9 +51,13 @@ export const toolSchemas = {
     };
   }),
   request_human_transfer: z.object({
-    orderId: z.string().describe('The internal database UUID of the order'),
+    orderId: z.string().optional(),
     reason: z.string().optional().default('human_requested')
   }),
+  get_delivery_quote: z.object({
+    city: z.string().optional(),
+    productPrice: z.number().optional()
+  }).passthrough(),
   search_shopify_products: z.object({
     query: z.string().describe('The product title or keywords to search for in store catalog'),
     page: z.number().optional().default(1)
@@ -254,11 +259,18 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
         };
       }
       case 'request_human_transfer': {
-        const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
-        const updated = await stateMachine.transition(OrderStatus.HUMAN_REQUIRED, validatedArgs.reason);
+        let updated = null;
+        if (validatedArgs.orderId) {
+          try {
+            const stateMachine = new OrderStateMachine(validatedArgs.orderId, shopDomain);
+            updated = await stateMachine.transition(OrderStatus.HUMAN_REQUIRED, validatedArgs.reason);
+          } catch (e) {
+            console.warn(`[Dispatcher] Order state transition warning:`, e.message);
+          }
+        }
         const escalation = await HumanEscalationService.escalate({
           shopDomain,
-          orderId: validatedArgs.orderId,
+          orderId: validatedArgs.orderId || null,
           reason: validatedArgs.reason,
           context
         });
@@ -270,8 +282,24 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
           notificationSent: escalation.notificationSent,
           reason: validatedArgs.reason,
           message: escalation.message,
-          data: toSafeOrderResult(updated)
+          data: updated ? toSafeOrderResult(updated) : null
         };
+      }
+      case 'get_delivery_quote': {
+        const quote = await DeliveryService.getDeliveryQuote({
+          shopDomain,
+          city: validatedArgs.city || context.city,
+          orderId: context.orderId || validatedArgs.orderId,
+          subtotal: validatedArgs.productPrice
+        });
+        if (validatedArgs.productPrice) {
+          const calc = DeliveryService.calculateTotal(validatedArgs.productPrice, quote.deliveryCharge);
+          return {
+            ...quote,
+            calculation: calc
+          };
+        }
+        return quote;
       }
       case 'search_shopify_products': {
         const result = await ShopifyCatalogService.searchProducts(shopDomain, validatedArgs.query, { page: validatedArgs.page });

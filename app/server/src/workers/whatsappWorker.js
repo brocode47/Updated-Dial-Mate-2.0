@@ -81,7 +81,32 @@ export async function processWhatsAppJob(job) {
   // 3. Media Metadata Preparation & Prompt Resolution
   // ========================================================
   const mediaInfo = parseMediaMetadata(payload);
-  const messageText = mediaInfo.promptText ? mediaInfo.promptText.trim() : '';
+  let messageText = mediaInfo.promptText ? mediaInfo.promptText.trim() : '';
+
+  // Inbound Voice Note Processing: retrieve audio & transcribe with Gemini
+  if (mediaInfo.isMedia && mediaInfo.mediaType === 'audio') {
+    try {
+      const waClient = new WhatsAppClient({
+        baseUrl: process.env.WA_AKG_BASE_URL,
+        apiKey: process.env.WA_AKG_API_KEY,
+        sessionId: String(sessionId),
+        shopId: String(shopId)
+      });
+      const audioBuffer = await waClient.downloadMedia(messageId, { sessionId });
+      if (audioBuffer && audioBuffer.length > 0) {
+        const { AudioTranscriberService } = await import('../services/audioTranscriberService.js');
+        const transcript = await AudioTranscriberService.transcribeAudio(
+          audioBuffer,
+          mediaInfo.metadata?.mimeType || 'audio/ogg'
+        );
+        if (transcript) {
+          messageText = transcript;
+        }
+      }
+    } catch (audioErr) {
+      console.warn(`⚠️ [WhatsAppWorker] Voice note transcription notice (${audioErr.message}). Using fallback prompt.`);
+    }
+  }
 
   if (!messageText) {
     waLogger.log(traceId, 'EMPTY_MESSAGE_IGNORED', { messageId, jid });
@@ -172,7 +197,8 @@ export async function processWhatsAppJob(job) {
         sessionId,
         fromPhone: jid,
         messageText,
-        messageId
+        messageId,
+        isVoiceInbound: mediaInfo.isMedia && mediaInfo.mediaType === 'audio'
       });
 
       agentName = 'Zara';

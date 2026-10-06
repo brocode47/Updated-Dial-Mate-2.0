@@ -7,25 +7,28 @@ import { OrderEligibilityService } from './orderEligibilityService.js';
 import { PhoneNormalizer } from './phoneNormalizer.js';
 import { ShopifyCatalogService } from './shopifyCatalogService.js';
 import { ConversationStateService } from './conversationStateService.js';
+import { DeliveryService } from './deliveryService.js';
+import { HumanEscalationService } from './humanEscalationService.js';
 
 /**
- * WhatsApp AI Customer Agent Service ("Zara")
+ * WhatsApp AI Customer Agent Service ("Zara 2.0")
  * 
- * Production Capabilities:
+ * Production-Grade Architecture:
  * 1. Persona: "Zara" — Courteous, professional Roman Urdu / English support assistant.
  * 2. Multi-Tenant Scoped: Strict isolation by shopId & shopDomain.
  * 3. Canonical Phone & Identity: Multi-variant matching across +92, 92, 03, dashes/spaces.
- * 4. Human Takeover: Completely silences AI when conversation.isTakeover === true.
- * 5. Factual Shopify Grounding: Authoritative catalog service, non-NaN pricing, clickable storefront URLs.
- * 6. Structured Conversational Memory: Tracks search context, handles "aur dikhao" pagination and ordinal references.
- * 7. Anti-Hallucination & Negation Safety: Strict guards against unauthorized confirmation/cancellation.
+ * 4. Human Escalation: True WhatsApp alerts delivered to store owner with complete context & deduplication.
+ * 5. Product Status Policy: Inventory/stock status suppressed by default; only shown when explicitly queried.
+ * 6. Persistent Entity Resolution: Maintains currentProduct, lastProducts, currentOrder, deliveryContext across turns.
+ * 7. Authoritative Delivery: Grounded in real store COD shipping rates (Rs. 199 for Sunday Bazaaar) via get_delivery_quote.
+ * 8. Conversation Lifecycle: Greeting strictly limited to conversation start; zero greeting repetition mid-chat.
+ * 9. Order Routing: "Last order", "jo last order aya", "latest booking" never routes to product search.
+ * 10. Purchase vs Order Confirm: "anti snoring wala product confirm kro" routes to purchase assistance.
+ * 11. Pakistani Language Engine: Comprehensive phonetic typos, SMS slang, Urdu script, Roman Urdu, and negation safety.
  */
 export class WhatsAppAgentService {
   /**
    * Sanitizes customer-facing text to guarantee zero NaN, undefined, or null leaks
-   * 
-   * @param {string} text 
-   * @returns {string}
    */
   static sanitizeResponse(text) {
     if (!text) return '';
@@ -40,32 +43,36 @@ export class WhatsAppAgentService {
 
   /**
    * Evaluates text for negation patterns to prevent hazardous false actions
-   * 
-   * @param {string} text - Message text
-   * @param {'confirm'|'cancel'} action - Target action
-   * @returns {boolean} True if negation is detected
    */
   static isNegated(text, action) {
     const clean = String(text || '').toLowerCase().trim();
     if (action === 'confirm') {
-      // Customer expressing: do NOT confirm
-      return /\b(nahi|na|mat|never|don't|dont|not)\s+(confirm|dispatch|bhejo|bhejna)\b/i.test(clean) ||
-             /\b(confirm|dispatch|bhejo|bhejna)\s+(nahi|na|mat|karna\s+nahi)\b/i.test(clean) ||
-             /\b(cancel\s*(kar|kardo|karna))\b/i.test(clean);
+      return /\b(nahi|na|mat|never|don't|dont|not|nhi)\s+(confirm|dispatch|bhejo|bhejna|book)\b/i.test(clean) ||
+             /\b(confirm|dispatch|bhejo|bhejna|book)\s+(nahi|na|mat|karna\s+nahi|nhi)\b/i.test(clean) ||
+             /\b(cancel\s*(kar|kardo|karna))\b/i.test(clean) ||
+             /\b(abhi\s*(confirm\s*)?nahi|confirm\s*nahi\s*karna)\b/i.test(clean);
     }
     if (action === 'cancel') {
-      // Customer expressing: do NOT cancel
-      return /\b(nahi|na|mat|never|don't|dont|not)\s+(cancel|radd|rokna)\b/i.test(clean) ||
-             /\b(cancel)\s+(nahi|na|mat|mat\s+karna)\b/i.test(clean) ||
+      return /\b(nahi|na|mat|never|don't|dont|not|nhi)\s+(cancel|radd|rokna)\b/i.test(clean) ||
+             /\b(cancel)\s+(nahi|na|mat|mat\s+karna|nhi)\b/i.test(clean) ||
+             /\b(main\s*cancel\s*nahi\s*keh\s*raha|cancel\s*nahi\s*karna)\b/i.test(clean) ||
              /\b(confirm\s*hi\s*rakhna|bhejna\s*hi\s*hai)\b/i.test(clean);
     }
     return false;
   }
 
   /**
-   * Detects customer intent from message text
+   * Checks if customer explicitly inquired about product stock/availability
    */
-  static detectIntent(text) {
+  static isAvailabilityInquiry(text) {
+    const clean = String(text || '').toLowerCase().trim();
+    return /(stock\s*hai|available\s*hai|available|mil\s*jayega|mil\s*sakega|stock\s*mein\s*hai|stock\??|in\s*stock|availble)/i.test(clean);
+  }
+
+  /**
+   * Detects customer intent from message text with Pakistani language engine
+   */
+  static detectIntent(text, context = {}) {
     const clean = String(text || '').toLowerCase().trim();
 
     // 1. Direct code shortcuts
@@ -77,11 +84,15 @@ export class WhatsAppAgentService {
     }
 
     // 2. Human escalation request
-    if (/\b(human|agent|operator|representative|insan|asli banda|real person|real banda|call back|rabta|support team)\b/i.test(clean)) {
+    if (
+      /\b(human|agent|operator|representative|insan|asli banda|real person|real banda|call back|rabta|support team|customer support|owner)\b/i.test(clean) ||
+      /(kisi\s*(insan|bande|person)|real\s*(person|banda|insan)|human\s*(se|support)|owner\s*(se|ko)|customer\s*support|agent\s*(se|ko)|representative\s*(se|ko)|bande\s*se\s*baat)/i.test(clean) ||
+      /(mujhe\s*(kisi\s*)?(insan|owner|bande|agent|support)\s*se\s*baat|transfer\s*karo|connect\s*karo)/i.test(clean)
+    ) {
       return { intent: 'HUMAN_TRANSFER', confidence: 0.95 };
     }
 
-    // 3. Negation checks before keyword matching
+    // 3. Negation checks before action matching
     const cancelNegated = this.isNegated(clean, 'cancel');
     const confirmNegated = this.isNegated(clean, 'confirm');
 
@@ -91,65 +102,132 @@ export class WhatsAppAgentService {
     }
 
     // Explicit cancellation phrases or cancel negation
-    if (/\b(cancel\s*(kar|kardo|karein|karna|dein)?|nahi\s*chahiye|wapas|mat\s*bhejo)\b/i.test(clean) || cancelNegated) {
+    if (
+      (/\b(cancel\s*(kar|kardo|karein|karna|dein)?|cancle|cancil|cancl|nahi\s*chahiye|wapas|mat\s*bhejo)\b/i.test(clean) && !cancelNegated && !/\b(hua|hoga|ho\s*gaya|status)\b/i.test(clean)) ||
+      cancelNegated
+    ) {
       return { intent: 'CANCEL', confidence: 0.95 };
     }
 
-    // Confirmation phrases or confirm negation
-    if (/\b(confirm\s*(kar|kardo|karein|karna|dein)?|haan|yes|ji|dispatch\s*(kar|kardo|dein)?|bhej\s*(do|dein)?)\b/i.test(clean) || confirmNegated) {
-      return { intent: 'CONFIRM', confidence: 0.90 };
-    }
-
-    // 4. "Aur dikhao" / Pagination intent
-    if (/\b(aur\s*dikhao|aur\s*dikha|aur\s*bhejo|aur\s*batao|mazeed\s*dikhao|next\s*page|more\s*products|aur\s*items)\b/i.test(clean) || clean === 'aur dikhao' || clean === 'more') {
-      return { intent: 'MORE', confidence: 0.95 };
-    }
-
-    // 5. Ordinal or Contextual Product References ("pehle wale", "doosre ka link", "iska price")
-    if (/\b(pehle\s*wale|doosre\s*wale|dusre\s*wale|teesre|tisre|chothe|paanchwe|1st|2nd|3rd|number\s*1|number\s*2|iska\s*(price|link|rate)|iski\s*(price|link|rate)|ye\s*wala|yeh\s*wala)\b/i.test(clean)) {
-      return { intent: 'ORDINAL_REFERENCE', confidence: 0.92 };
-    }
-
-    // 6. Direct Order queries
-    if (/\b(order\s*status|status\s*kya\s*hai|status\s*batao|order\s*kahan\s*tak|status)\b/i.test(clean)) {
+    // 4. Order Status Queries (check status explicitly before general order summary)
+    if (/\b(order\s*status|status\s*kya\s*hai|status\s*batao|order\s*kahan\s*tak|status|order\s*confirm\s*hua|mera\s*order\s*cancel\s*hua|cancel\s*hua|confirm\s*hua)\b/i.test(clean)) {
       return { intent: 'ORDER_STATUS', confidence: 0.95 };
     }
 
-    if (/\b(delivery\s*charges|shipping\s*charges|delivery\s*ke\s*kitne|delivery\s*cost)\b/i.test(clean)) {
+    // 5. Order Delivery Charges
+    if (/\b(delivery\s*charges|shipping\s*charges|delivery\s*ke\s*kitne|delivery\s*cost)\b/i.test(clean) && /\border\b/i.test(clean)) {
       return { intent: 'ORDER_DELIVERY_CHARGES', confidence: 0.95 };
     }
 
-    if (/\b(iska\s*total|total\s*kitna|total\s*bill|kitne\s*paise|total\s*amount|cod\s*amount|kitna\s*bill)\b/i.test(clean)) {
+    // 6. Order Total
+    if (/\b(iska\s*total|total\s*kitna|total\s*bill|kitne\s*paise|total\s*amount|cod\s*amount|kitna\s*bill)\b/i.test(clean) && /\border\b/i.test(clean)) {
       return { intent: 'ORDER_TOTAL', confidence: 0.95 };
     }
 
-    if (/\b(mera\s*order\s*kya\s*hai|kya\s*order\s*hai|order\s*details|kya\s*order\s*kiya|kya\s*mangwaya|mera\s*order)\b/i.test(clean)) {
-      return { intent: 'ORDER_SUMMARY', confidence: 0.95 };
+    // 7. Order Summary / Last Order Queries
+    // CRITICAL: Must be checked BEFORE product inquiries so "last order" never routes to catalog search!
+    if (
+      !/\b(confirm|cnfrm|confrim|cancel|cancle|dispatch)\b/i.test(clean) && (
+        /\b(last\s*order|latest\s*order|recent\s*order|last\s*wala\s*order|jo\s*(tumhare\s*pas\s*)?last\s*order|mera\s*last\s*order|last\s*order\s*ka\s*number|latest\s*booking|meri\s*latest\s*booking|jo\s*last\s*order\s*aya)\b/i.test(clean) ||
+        /\b(mera\s*order\s*kya\s*hai|kya\s*order\s*hai|order\s*details|kya\s*order\s*kiya|kya\s*mangwaya|mera\s*order|mere\s*kitne\s*orders)\b/i.test(clean) ||
+        /\b(mera\s*par[sc][ae]l\s*(kidr|kahan|kab)?|par[sc][ae]l\s*kab\s*ayega|order\s*kab\s*(ayega|milega)|(par[sc][ae]l|order)\s*kab\s*(ayega|milega|deliver|pohanchega)|order\s*kahan\s*pohancha|kab\s*deliver\s*hoga|delivery\s*kab\s*(hogi|ho\s*gi)|order\s*kidr\s*hai|order\s*kahan\s*hai)\b/i.test(clean)
+      )
+    ) {
+      return { intent: 'ORDER_SUMMARY', confidence: 0.96 };
     }
 
-    // 7. Store / Website link
-    if (/\b(website\s*(ka\s*)?(link|url)?|store\s*(ka\s*)?(link|url)|website\s*kya\s*hai|online\s*store)\b/i.test(clean) && !/\b(product|item|iska)\b/i.test(clean)) {
+    // 8. Product Purchase Intent vs Existing Order Confirmation
+    if (
+      (/\b(order\s*kar\s*(do|dein|kardo)|book\s*kar\s*(do|dein|kardo)|ye\s*order\s*kar\s*(do|dein)|ye\s*lena\s*hai|yeh\s*lena\s*hai|order\s*karna\s*hai|mujhe\s*ye\s*chahiye|ye\s*chahiye)\b/i.test(clean)) ||
+      (/\b(confirm\s*(kar|kardo|karein|karna|dein)?|cnfrm|confrim)\b/i.test(clean) && /\b(product|item|wala|wali|cover|belt|nasal|snoring)\b/i.test(clean) && !/\bmera\s*order\b/i.test(clean))
+    ) {
+      return { intent: 'PURCHASE_INTENT', confidence: 0.94 };
+    }
+
+    // Confirmation of existing order (including confirmNegated so handleIncomingMessage handles it)
+    if (
+      /\b(confirm\s*(kar|kardo|karein|karna|dein)?|cnfrm|confrim|dispatch\s*(kar|kardo|dein)?|bhej\s*(do|dein)?)\b/i.test(clean) ||
+      clean === 'haan' || clean === 'yes' || clean === 'ji' || confirmNegated
+    ) {
+      return { intent: 'CONFIRM', confidence: 0.90 };
+    }
+
+    // 9. Delivery Charges & Shipping Inquiry (General / Product)
+    if (
+      /\b(delivery\s*charges|shipping\s*charges|deliv[er]*y\s*charges|delivery\s*kitni|shipping\s*kitni|delivery\s*cost|ghar\s*tak\s*delivery|delivery\s*ke\s*sath|delivery\s*mila\s*ke|total\s*delivery)\b/i.test(clean) ||
+      clean === 'delivery' || clean === 'delivery?' || clean === 'delivery charges' || clean === 'shipping' ||
+      /\b(karachi|lahore|islamabad|rawalpindi|peshawar|multan|faisalabad)\s+delivery\b/i.test(clean)
+    ) {
+      return { intent: 'ORDER_DELIVERY_CHARGES', confidence: 0.95 };
+    }
+
+    // 10. Total Price Inquiry ("total kitna", "iska total", "total bill")
+    if (/\b(iska\s*total|total\s*kitna|total\s*bill|kitne\s*paise|total\s*amount|cod\s*amount|kitna\s*bill|kul\s*total|total\?)\b/i.test(clean) || clean === 'total' || clean === 'total?') {
+      return { intent: 'ORDER_TOTAL', confidence: 0.95 };
+    }
+
+    // 11. Conversational Clarification / Soft Negation ("Nahi main kar raha hoon na")
+    if (/\b(nahi\s*main\s*(kar|kr)\s*rha\s*hun|main\s*khud\s*kar\s*raha|nahi\s*rehne\s*do|wait|ek\s*minute)\b/i.test(clean)) {
+      return { intent: 'CONVERSATIONAL_CLARIFICATION', confidence: 0.90 };
+    }
+
+    // 12. "Aur dikhao" / Pagination intent
+    if (/\b(aur\s*dikhao|aur\s*dikha|aur\s*bhejo|aur\s*batao|mazeed\s*dikhao|next\s*page|more\s*products|aur\s*items|aur\s*products|mazeed|agla)\b/i.test(clean) || clean === 'aur dikhao' || clean === 'more' || clean === 'or?' || clean === 'next') {
+      return { intent: 'MORE', confidence: 0.95 };
+    }
+
+    // 13. Ordinal or Contextual Product References ("pehle wale", "doosre ka link", "iska price", "ye wala")
+    if (/\b(pehle\s*wale|doosre\s*wale|dusre\s*wale|teesre|tisre|chothe|paanchwe|1st|2nd|3rd|number\s*1|number\s*2|iska\s*(price|link|rate|prize)|iski\s*(price|link|rate|prize)|ye\s*wala|yeh\s*wala|pehly\s*walay|woh\s*wala|doosra\s*wala|last\s*wala)\b/i.test(clean) && !/\border\b/i.test(clean)) {
+      return { intent: 'ORDINAL_REFERENCE', confidence: 0.92 };
+    }
+
+    // 14. Store / Website link (check before product link so 'website ka link do' -> STORE_LINK)
+    if (/\b(website\s*(ka\s*)?(link|url)?|store\s*(ka\s*)?(link|url)|website\s*kya\s*hai|online\s*store|website\s*bhejo)\b/i.test(clean) && !/\b(product|item|iska)\b/i.test(clean)) {
       return { intent: 'STORE_LINK', confidence: 0.95 };
     }
 
-    // 8. Collection requests
+    // 15. Direct Product Link request ("link bhejo", "iska link", "website bhejo")
+    if (/\b(link\s*(bhejo|send\s*kro|bhej\s*do|do)|iska\s*link|product\s*link)\b/i.test(clean) || clean === 'link' || clean === 'link?') {
+      return { intent: 'PRODUCT_LINK', confidence: 0.95 };
+    }
+
+    // 16. Collection requests
     if (/\b(collection|collections|kitchen\s*collection|mobile\s*accessories|women\s*collection|cleaning\s*collection)\b/i.test(clean)) {
       return { intent: 'COLLECTION', confidence: 0.90 };
     }
 
-    // 9. Catalog browsing
-    if (/\b(catalog\s*dikhao|products\s*dikhao|sari\s*items|tamam\s*products|kya\s*kya\s*hai|list\s*bhejo|sab\s*products)\b/i.test(clean)) {
+    // 17. Catalog browsing
+    if (/\b(catalog\s*dikhao|catalog\s*bhejo|products\s*dikhao|sari\s*items|tamam\s*products|kya\s*kya\s*hai|list\s*bhejo|sab\s*products|aur\s*kya\s*hai)\b/i.test(clean)) {
       return { intent: 'CATALOG', confidence: 0.92 };
     }
 
-    // 10. Single Product Detail inquiry
-    if (/\b(ki\s*price|ka\s*rate|kitne\s*ka\s*hai|price\s*batao|rate\s*batao|kitne\s*ka)\b/i.test(clean)) {
+    // 18. Single Product Detail inquiry (e.g. "adhesive wall max ki price batao", "details batao")
+    if (/\b(ki\s*price|ka\s*rate|kitne\s*ka\s*hai|price\s*batao|rate\s*batao|kitne\s*ka|ye\s*kitny\s*ka|iska\s*rate|prize|details\s*batao|detail\s*batao|details|detail)\b/i.test(clean) || clean === 'price' || clean === 'price?' || clean === 'details') {
       return { intent: 'PRODUCT_DETAIL', confidence: 0.88 };
     }
 
-    // 11. General Product search
-    if (/\b(product|item|price|kya hai|available|stock|dusra|aur|cover|belt|shoes|shirt|suit|rate|wall\s*max)\b/i.test(clean)) {
+    // 19. Product Inquiry (check named products or phrases like "kya aapke paas chair cover available hai")
+    if (/\b(product|item|price|kya hai|dusra|cover|belt|shoes|shirt|suit|rate|wall\s*max|chair|kursi|snoring|dilator)\b/i.test(clean)) {
       return { intent: 'PRODUCT_INQUIRY', confidence: 0.85 };
+    }
+
+    // 20. Standalone Product Availability explicitly asked ("available hai?", "stock hai?", "mil jayega?")
+    if (/\b(available\s*hai|stock\s*hai|mil\s*jayega|mil\s*sakega|stock\s*mein\s*hai|available\?|stock\?|in\s*stock|availble)\b/i.test(clean)) {
+      return { intent: 'PRODUCT_AVAILABILITY', confidence: 0.93 };
+    }
+
+    // 21. General Social & Chit-Chat (e.g. "kya mujhse dosti karogi", "thank you", "acha", "Allah hafiz")
+    if (/\b(dosti\s*karogi|friendship\s*karogy|friends|dosti)\b/i.test(clean)) {
+      return { intent: 'SOCIAL_FRIENDSHIP', confidence: 0.95 };
+    }
+    if (/\b(thank\s*you|thanks|shukriya|meherbani)\b/i.test(clean)) {
+      return { intent: 'SOCIAL_THANKYOU', confidence: 0.95 };
+    }
+    if (/\b(allah\s*hafiz|khuda\s*hafiz|bye|goodbye)\b/i.test(clean)) {
+      return { intent: 'SOCIAL_CLOSING', confidence: 0.95 };
+    }
+    if (clean === 'acha' || clean === 'theek' || clean === 'theek hai' || clean === 'ok' || clean === 'acha ji' || clean === 'sahi') {
+      return { intent: 'SOCIAL_ACK', confidence: 0.90 };
     }
 
     return { intent: 'GENERAL_QUERY', confidence: 0.60 };
@@ -163,12 +241,13 @@ export class WhatsAppAgentService {
       shopId,
       shopDomain,
       sessionId,
-      messageId = null
+      messageId = null,
+      isVoiceInbound = false
     } = params;
     const fromPhone = params.fromPhone || params.fromJid || params.phone;
     const messageText = params.messageText || params.text || '';
     const startTime = Date.now();
-    console.log(`🤖 [WhatsAppAgent] Processing incoming message from ${fromPhone} (Shop: ${shopDomain}, Session: ${sessionId}): "${messageText}"`);
+    console.log(`🤖 [WhatsAppAgent] Processing incoming message from ${fromPhone} (Shop: ${shopDomain}, Session: ${sessionId}): "${messageText}" [Voice: ${isVoiceInbound}]`);
 
     // 1. Resolve Shop
     let shop = null;
@@ -186,7 +265,7 @@ export class WhatsAppAgentService {
     const customer = await PhoneNormalizer.resolveCustomer(shop.id, fromPhone);
     const cleanPhone = customer?.phone || OrderEligibilityService.cleanPhoneNumber(fromPhone) || String(fromPhone).replace(/[^0-9]/g, '');
 
-    // Initialize WA Client and immediately signal typing presence (non-blocking)
+    // Initialize WA Client and immediately signal typing presence
     const waClient = new WhatsAppClient({
       baseUrl: process.env.WA_AKG_BASE_URL,
       apiKey: process.env.WA_AKG_API_KEY,
@@ -255,16 +334,124 @@ export class WhatsAppAgentService {
     // 6. Resolve Active & Relevant Orders via canonical PhoneNormalizer
     const orders = await PhoneNormalizer.resolveOrders(shop.id, customer?.id, fromPhone);
     const recentOrder = orders[0] || null;
-    const orderContext = recentOrder;
+
+    // Retrieve active conversation state memory
+    const state = await ConversationStateService.getState(conversation.id);
+    const activeProduct = await ConversationStateService.resolveActiveProduct(conversation.id);
+    const shouldGreet = await ConversationStateService.shouldGreet(conversation.id, conversation.messages ? conversation.messages.length : 0);
 
     const storeName = shop.name || shop.domain.replace('.myshopify.com', '');
-    const detected = this.detectIntent(messageText);
+    const detected = this.detectIntent(messageText, { activeProduct, recentOrder, state });
     let replyText = '';
     let executedAction = null;
     let usedLLM = false;
 
+    // Extract city if mentioned anywhere in message
+    const cityMatch = messageText.match(/\b(Karachi|Lahore|Islamabad|Rawalpindi|Peshawar|Faisalabad|Multan|Quetta|Sialkot|Gujranwala)\b/i);
+    const mentionedCity = cityMatch ? cityMatch[0] : null;
+
     // 7. Intent Execution & Deterministic Fast-Paths
-    if (detected.intent === 'CONFIRM') {
+    if (detected.intent === 'HUMAN_TRANSFER') {
+      executedAction = 'request_human_transfer';
+      const escalationResult = await ToolDispatcher.dispatch('request_human_transfer', {
+        orderId: recentOrder?.orderId || null,
+        reason: 'Customer requested human support via WhatsApp'
+      }, {
+        shopDomain: shop.domain,
+        shopId: shop.id,
+        orderId: recentOrder?.orderId || null,
+        customerPhone: cleanPhone,
+        customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : null,
+        customerCity: mentionedCity || recentOrder?.shippingAddress || 'On file',
+        customerMessage: messageText,
+        conversationId: conversation.id,
+        activeProduct,
+        productTitle: activeProduct?.title || null,
+        orderNumber: recentOrder?.orderNumber || null
+      });
+
+      // Mark conversation as taken over
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { isTakeover: true }
+      }).catch(() => {});
+
+      replyText = `Maine hamari human support team ko inform kar diya hai. Hamari team aapse jald rabta karegi. Shukriya!`;
+    } else if (detected.intent === 'ORDER_SUMMARY') {
+      executedAction = 'order_summary_fastpath';
+      await ConversationStateService.updateState(conversation.id, { recentTopic: 'order' });
+      if (orders.length > 1) {
+        const list = orders.slice(0, 3).map(o => `• Order #${o.orderNumber || o.id.slice(0, 6)} (Rs. ${Number(o.totalAmount).toLocaleString()}) — ${o.items}`).join('\n');
+        replyText = `Aapke ${orders.length} orders record mein hain:\n\n${list}\n\nAap kis order ke baare mein maloomat chahtay hain?`;
+      } else if (recentOrder) {
+        replyText = `Aapka order #${recentOrder.orderNumber} hai jisme "${recentOrder.items}" shamil hai. Iska kul COD bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai aur status "${recentOrder.status}" hai.`;
+      } else {
+        replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
+      }
+    } else if (detected.intent === 'ORDER_STATUS' && recentOrder) {
+      executedAction = 'order_status_fastpath';
+      await ConversationStateService.updateState(conversation.id, { recentTopic: 'order' });
+      replyText = `Aapke order #${recentOrder.orderNumber} ka current status "${recentOrder.status}" hai.`;
+    } else if (detected.intent === 'ORDER_TOTAL' && recentOrder) {
+      executedAction = 'order_total_fastpath';
+      replyText = `Aapke order #${recentOrder.orderNumber} ka kul COD total Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
+    } else if (detected.intent === 'ORDER_DELIVERY_CHARGES' && recentOrder) {
+      executedAction = 'order_delivery_charges_fastpath';
+      if (recentOrder.shippingFee > 0) {
+        replyText = `Aapke order #${recentOrder.orderNumber} ke delivery charges Rs. ${Number(recentOrder.shippingFee).toLocaleString()} hain. Kul bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
+      } else {
+        replyText = `Aapke order #${recentOrder.orderNumber} par standard delivery bilkul free hai! Kul bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
+      }
+    } else if (detected.intent === 'DELIVERY_INQUIRY' || detected.intent === 'ORDER_DELIVERY_CHARGES') {
+      executedAction = 'delivery_quote_fastpath';
+      const quote = await DeliveryService.getDeliveryQuote({
+        shopDomain: shop.domain,
+        city: mentionedCity,
+        orderId: recentOrder?.orderId,
+        subtotal: activeProduct?.numericPrice
+      });
+
+      if (activeProduct) {
+        const calc = DeliveryService.calculateTotal(activeProduct.numericPrice, quote.deliveryCharge);
+        await ConversationStateService.updateState(conversation.id, { deliveryContext: quote, recentTopic: 'product' });
+        replyText = `Ji, *${activeProduct.title}* Rs. ${activeProduct.numericPrice} ka hai.\n\nDelivery charges: Rs. ${quote.deliveryCharge}\nTotal: Rs. ${calc.total}\n\nProduct details:\n🔗 ${activeProduct.url}`;
+      } else if (recentOrder) {
+        replyText = `Aapke order #${recentOrder.orderNumber} ke delivery charges Rs. ${Number(recentOrder.shippingFee || quote.deliveryCharge).toLocaleString()} hain. Kul bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
+      } else {
+        replyText = `Hamare standard delivery charges Rs. ${quote.deliveryCharge} hain aur delivery ${quote.estimatedDelivery} mein hoti hai.`;
+      }
+    } else if (detected.intent === 'TOTAL_INQUIRY' || detected.intent === 'ORDER_TOTAL') {
+      executedAction = 'total_inquiry_fastpath';
+      if (activeProduct) {
+        const quote = await DeliveryService.getDeliveryQuote({
+          shopDomain: shop.domain,
+          city: mentionedCity,
+          subtotal: activeProduct.numericPrice
+        });
+        const calc = DeliveryService.calculateTotal(activeProduct.numericPrice, quote.deliveryCharge);
+        replyText = `*${activeProduct.title}*\nProduct: Rs. ${activeProduct.numericPrice}\nDelivery charges: Rs. ${quote.deliveryCharge}\nTotal: Rs. ${calc.total}\n\n🔗 ${activeProduct.url}`;
+      } else if (recentOrder) {
+        replyText = `Aapke order #${recentOrder.orderNumber} ka kul COD total Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
+      } else {
+        replyText = `Aap kis product ka total bill janna chahte hain? Product ka naam ya link bata dein.`;
+      }
+    } else if (detected.intent === 'PURCHASE_INTENT') {
+      executedAction = 'purchase_intent_assisted';
+      let candidate = activeProduct;
+      if (!candidate || !messageText.includes(candidate.title.toLowerCase().split(' ')[0])) {
+        const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, messageText.replace(/confirm|order|book|karna|hai|wala|product/gi, '').trim(), { limit: 1 });
+        if (searchRes.products && searchRes.products.length > 0) {
+          candidate = searchRes.products[0];
+          await ConversationStateService.updateState(conversation.id, { currentProduct: candidate });
+        }
+      }
+
+      if (candidate) {
+        replyText = `Ji, aap *${candidate.title}* (${candidate.formattedPrice}) order karna chahte hain? Main aapka order book karne mein madad kar deti hoon. Baraye meharbani apna mukammal delivery address aur city share kar dein.`;
+      } else {
+        replyText = `Ji bilkul! Aap kon sa product order karna chahtay hain? Product ka naam bata dein taake main aapki details note kar sakoon.`;
+      }
+    } else if (detected.intent === 'CONFIRM') {
       if (recentOrder) {
         if (this.isNegated(messageText, 'confirm')) {
           replyText = `Aapka order confirm nahi kiya gaya hai. Agar aap cancel karna chahtay hain to reply "2" ya "Cancel" likhein.`;
@@ -276,6 +463,8 @@ export class WhatsAppAgentService {
           executedAction = 'confirm_order';
           replyText = `Bohat shukriya! Aapka order #${recentOrder.orderNumber} confirm kar diya gaya hai aur jald dispatch kar diya jaye ga. Agar mazeed koi rehnumai chahiye ho to zaroor batayein.`;
         }
+      } else if (activeProduct) {
+        replyText = `Ji, aap *${activeProduct.title}* order karna chahte hain? Main aapka order book karne mein madad kar deti hoon. Baraye meharbani apna delivery address aur city share kar dein.`;
       } else {
         replyText = `Mujhe aapka koi pending order nahi mila confirm karne ke liye. Agar aapke paas order number hai to zaroor batayein.`;
       }
@@ -294,48 +483,23 @@ export class WhatsAppAgentService {
       } else {
         replyText = `Mujhe aapka koi order nahi mila cancel karne ke liye. Agar aapke paas order number hai to zaroor batayein.`;
       }
-    } else if (detected.intent === 'HUMAN_TRANSFER') {
-      await ToolDispatcher.dispatch('request_human_transfer', {
-        orderId: recentOrder?.orderId,
-        reason: 'Customer requested human support via WhatsApp'
-      }, {
-        shopDomain: shop.domain,
-        orderId: recentOrder?.orderId
-      });
-      // Mark conversation as taken over so Zara stays silent
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { isTakeover: true }
-      }).catch(() => {});
-
-      executedAction = 'request_human_transfer';
-      replyText = `Maine hamari human support team ko inform kar diya hai. Hamara representative jald hi aapse isi WhatsApp chat par rabta karega. Shukriya!`;
-    } else if (detected.intent === 'ORDER_SUMMARY') {
-      executedAction = 'order_summary_fastpath';
-      if (orders.length === 1) {
-        replyText = `Aapka order #${recentOrder.orderNumber} hai jisme "${recentOrder.items}" shamil hai. Iska kul COD bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai aur status "${recentOrder.status}" hai.`;
-      } else if (orders.length > 1) {
-        const list = orders.slice(0, 3).map(o => `• Order #${o.orderNumber || o.id.slice(0, 6)} (Rs. ${Number(o.totalAmount).toLocaleString()}) — ${o.items}`).join('\n');
-        replyText = `Aapke ${orders.length} orders record mein hain:\n\n${list}\n\nAap kis order ke baare mein maloomat chahtay hain?`;
-      } else {
-        replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
-      }
-    } else if (detected.intent === 'ORDER_TOTAL' && recentOrder) {
-      executedAction = 'order_total_fastpath';
-      replyText = `Aapke order #${recentOrder.orderNumber} ka kul COD total Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
-    } else if (detected.intent === 'ORDER_DELIVERY_CHARGES' && recentOrder) {
-      executedAction = 'order_delivery_charges_fastpath';
-      if (recentOrder.shippingFee > 0) {
-        replyText = `Aapke order #${recentOrder.orderNumber} ke delivery charges Rs. ${Number(recentOrder.shippingFee).toLocaleString()} hain. Kul bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
-      } else {
-        replyText = `Aapke order #${recentOrder.orderNumber} par standard delivery bilkul free hai! Kul bill Rs. ${Number(recentOrder.totalAmount).toLocaleString()} hai.`;
-      }
-    } else if (detected.intent === 'ORDER_STATUS' && recentOrder) {
-      executedAction = 'order_status_fastpath';
-      replyText = `Aapke order #${recentOrder.orderNumber} ka current status "${recentOrder.status}" hai.`;
+    } else if (detected.intent === 'CONVERSATIONAL_CLARIFICATION') {
+      executedAction = 'conversational_clarification';
+      replyText = `Theek hai! Aap tasalli se check kar lein, main yahin hoon agar koi bhi sawal ho.`;
+    } else if (detected.intent === 'SOCIAL_FRIENDSHIP') {
+      executedAction = 'social_response';
+      replyText = `Haha, bilkul! Aap mujhe apni shopping wali dost samajh sakte hain 😊 Jo bhi product ya order ke baare mein poochna ho, bata dein.`;
+    } else if (detected.intent === 'SOCIAL_THANKYOU') {
+      executedAction = 'social_response';
+      replyText = `Bohat shukriya! Agar mazeed kisi cheez mein madad chahiye ho to zaroor batayein.`;
+    } else if (detected.intent === 'SOCIAL_CLOSING') {
+      executedAction = 'social_response';
+      replyText = `Allah Hafiz! Apna khayal rakhiye ga.`;
+    } else if (detected.intent === 'SOCIAL_ACK') {
+      executedAction = 'social_response';
+      replyText = `Ji zaroor! Agar koi aur sawaal ho to bata dein.`;
     } else if (detected.intent === 'MORE') {
       executedAction = 'catalog_pagination_more';
-      const state = await ConversationStateService.getState(conversation.id);
       const nextPage = (state.currentPage || 1) + 1;
       const query = state.lastQuery || '';
       const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, query, { page: nextPage, limit: 5 });
@@ -354,17 +518,29 @@ export class WhatsAppAgentService {
       }
     } else if (detected.intent === 'ORDINAL_REFERENCE') {
       executedAction = 'ordinal_reference_resolution';
-      const refProduct = await ConversationStateService.resolveProductReference(conversation.id, messageText);
+      const refProduct = await ConversationStateService.resolveProductReference(conversation.id, messageText) || activeProduct;
       if (refProduct) {
-        if (/\b(price|kitne|rate|paisa|cost)\b/i.test(messageText)) {
+        await ConversationStateService.updateState(conversation.id, { currentProduct: refProduct, recentTopic: 'product' });
+        if (/\b(price|kitne|rate|paisa|cost|prize)\b/i.test(messageText)) {
           replyText = `Ji, *${refProduct.title}* ki price ${refProduct.formattedPrice} hai.\n🔗 ${refProduct.url}`;
         } else if (/\b(link|url|website)\b/i.test(messageText)) {
           replyText = `Yeh raha *${refProduct.title}* ka product link:\n🔗 ${refProduct.url}`;
         } else if (/\b(available|stock|hai)\b/i.test(messageText)) {
           replyText = `Ji, *${refProduct.title}* filhal ${refProduct.available ? 'stock mein available hai' : 'out of stock hai'}. Price: ${refProduct.formattedPrice}.\n🔗 ${refProduct.url}`;
         } else {
-          replyText = `*${refProduct.title}*\nPrice: ${refProduct.formattedPrice}\nStatus: ${refProduct.available ? 'In Stock' : 'Out of Stock'}\n🔗 ${refProduct.url}`;
+          // Failure 2 Guarantee: Default display does NOT expose inventory status
+          const quote = await DeliveryService.getDeliveryQuote({ shopDomain: shop.domain, subtotal: refProduct.numericPrice });
+          const calc = DeliveryService.calculateTotal(refProduct.numericPrice, quote.deliveryCharge);
+          replyText = `Ji, *${refProduct.title}* ${refProduct.formattedPrice} ka hai.\n\nDelivery charges: Rs. ${quote.deliveryCharge}\nTotal: Rs. ${calc.total}\n\nProduct details:\n🔗 ${refProduct.url}`;
         }
+      }
+    } else if (detected.intent === 'PRODUCT_LINK') {
+      executedAction = 'product_link_resolution';
+      if (activeProduct) {
+        replyText = `Yeh raha *${activeProduct.title}* ka link:\n🔗 ${activeProduct.url}`;
+      } else {
+        const storeInfo = await ShopifyCatalogService.getStoreInfo(shop.domain);
+        replyText = `Aap hamari website yahan visit kar saktay hain:\n🔗 ${storeInfo.storefrontUrl}`;
       }
     } else if (detected.intent === 'STORE_LINK') {
       executedAction = 'store_link';
@@ -380,6 +556,7 @@ export class WhatsAppAgentService {
       const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, '', { page: 1, limit: 5 });
       await ConversationStateService.updateState(conversation.id, {
         lastProducts: searchRes.products,
+        currentProduct: searchRes.products[0] || null,
         currentPage: 1,
         totalFound: searchRes.totalFound,
         lastQuery: ''
@@ -395,6 +572,7 @@ export class WhatsAppAgentService {
         const availableTools = [
           AITools.search_shopify_products,
           AITools.get_shopify_product_details,
+          AITools.get_delivery_quote,
           AITools.get_shopify_collections,
           AITools.get_store_info,
           AITools.confirm_order,
@@ -403,28 +581,36 @@ export class WhatsAppAgentService {
         ];
 
         const systemInstruction = (
-`You are Zara, the courteous, helpful AI customer support agent for "${storeName}".
-You are assisting a customer on WhatsApp.
-Speak natural, professional Roman Urdu and English.
+`You are Zara, the courteous, intelligent AI customer support assistant for "${storeName}".
+You are communicating with a customer in Pakistan on WhatsApp.
+Speak natural, helpful Roman Urdu and English. Be concise, polite, and human-like.
 
 Customer & Store Context:
 - Store: ${storeName}
 - Customer Phone: ${cleanPhone}
 ${recentOrder ? `- Order #${recentOrder.orderNumber} (Rs. ${recentOrder.totalAmount}) - Items: ${recentOrder.items} - Status: ${recentOrder.status}` : '- No active order.'}
+${activeProduct ? `- Active/Discussed Product: ${activeProduct.title} (${activeProduct.formattedPrice}) - Link: ${activeProduct.url}` : ''}
+${!shouldGreet ? '- NOTE: The conversation is ALREADY in progress. DO NOT start with greeting or say "Assalam-o-Alaikum! Main Zara hoon...". Answer directly.' : ''}
 
-STRICT INSTRUCTIONS:
-1. When asked about product pricing, availability, or details (e.g. "Adhesive wall max ki price batao", "iska link do"):
-   Call 'get_shopify_product_details' or 'search_shopify_products'.
-   When the tool returns the product, ANSWER THE CUSTOMER'S ACTUAL QUESTION FIRST (e.g. state the exact price or send the link).
-   Do NOT return a generic product list when they asked for a specific product's price.
-2. When asked for catalog or multiple items (e.g. "catalog dikhao", "kitchen items"):
-   Call 'search_shopify_products'. Provide up to 5 relevant items with their name, price, and clickable link.
-   Do NOT overwhelm with too many items. Mention the collection link for more.
-3. When customer asks for store link or website:
-   Call 'get_store_info'.
-4. Do NOT push for an order after every inquiry. Answer helpfully first.
-5. NEVER invent prices, products, or discounts. Shopify is the source of truth.
-6. If customer wants to confirm order, call 'confirm_order'. If cancel, call 'cancel_order'. If human support, call 'request_human_transfer'.`
+CRITICAL OPERATING RULES:
+1. PRODUCT AVAILABILITY / STOCK POLICY:
+   DEFAULT PRODUCT RESPONSES MUST NOT DISPLAY INVENTORY STATUS (do NOT say "In stock", "Out of stock", "available hai").
+   ONLY state stock if the customer explicitly asked (e.g. "stock hai?", "available hai?", "mil jayega?").
+   Default format: Product Name, Price, Relevant detail, Delivery & Total if asked, and Product URL.
+2. CONTEXTUAL RESOLUTION:
+   If the customer asks "iski price", "delivery", "total", "link", they refer to the Active Product (${activeProduct?.title || 'previously discussed item'}).
+   Do NOT ask "Kis product ki price?". Answer directly!
+3. DELIVERY CHARGES:
+   Call 'get_delivery_quote' for delivery charges.
+   Sunday Bazaaar standard COD delivery is Rs. 199 across Pakistan (3-5 business days).
+   When asked "total price delivery ke sath", calculate Product + Delivery = Total.
+4. ORDER INQUIRIES:
+   "mera order", "last order", "jo last order aya" are ORDER queries. NEVER search products for order queries.
+5. PURCHASE VS CONFIRMATION:
+   If customer says "anti snoring wala product confirm kro" or wants to buy a product, assist with booking the product. Do NOT say "Mujhe aapka order nahi mila".
+6. HUMAN ASSISTANCE:
+   If customer requests a person, call 'request_human_transfer'. Say: "Ji, main ne aapki request customer support ko bhej di hai. Hamari team aapse jald rabta karegi." Do NOT claim live telephony connection.
+7. NEVER invent prices, discounts, or medical cures.`
         );
 
         // Build prior history messages
@@ -470,7 +656,10 @@ Zara:`
           // Tool dispatch with tenant context
           const toolResult = await ToolDispatcher.dispatch(call.name, call.args || {}, {
             shopDomain: shop.domain,
-            orderId: recentOrder?.orderId
+            orderId: recentOrder?.orderId,
+            customerPhone: cleanPhone,
+            conversationId: conversation.id,
+            activeProduct
           });
 
           // Update conversational state with products returned
@@ -478,10 +667,12 @@ Zara:`
           if (returnedProducts.length > 0) {
             await ConversationStateService.updateState(conversation.id, {
               lastProducts: returnedProducts,
+              currentProduct: returnedProducts[0],
               lastReferencedProduct: returnedProducts[0],
               lastQuery: call.args?.query || '',
               currentPage: toolResult.page || 1,
-              totalFound: toolResult.totalFound || returnedProducts.length
+              totalFound: toolResult.totalFound || returnedProducts.length,
+              recentTopic: 'product'
             });
           }
 
@@ -513,19 +704,26 @@ Zara:`
             console.warn(`⚠️ [WhatsAppAgent] Gemini Turn 2 notice (${turn2Err.message}). Using clean factual format.`);
           }
 
-          // Fallback if Turn 2 is empty
+          // Fallback if Turn 2 is empty or needs formatting
           if (!replyText) {
             if (call.name === 'get_shopify_product_details' && toolResult?.product) {
               const p = toolResult.product;
-              replyText = `Ji, *${p.title}* ki price ${p.formattedPrice} hai aur yeh filhal ${p.available ? 'in stock' : 'out of stock'} hai.\n🔗 ${p.url}`;
+              replyText = `Ji, *${p.title}* ${p.formattedPrice} ka hai.\n\n${p.description ? p.description + '\n\n' : ''}Product details:\n🔗 ${p.url}`;
             } else if (call.name === 'search_shopify_products') {
               const products = toolResult?.products || [];
               if (products.length > 0) {
-                const list = products.slice(0, 5).map((p, idx) => `${idx + 1}. *${p.title}* — ${p.formattedPrice}\n🔗 ${p.url}`).join('\n\n');
-                replyText = `Hamare paas yeh products available hain:\n\n${list}\n\nTamam collection yahan dekhein:\n🔗 ${toolResult.allProductsUrl}`;
+                if (products.length === 1) {
+                  const p = products[0];
+                  replyText = `Ji, *${p.title}* ${p.formattedPrice} ka hai.\n\n${p.description ? p.description + '\n\n' : ''}Product details:\n🔗 ${p.url}`;
+                } else {
+                  const list = products.slice(0, 5).map((p, idx) => `${idx + 1}. *${p.title}* — ${p.formattedPrice}\n🔗 ${p.url}`).join('\n\n');
+                  replyText = `Hamare paas yeh products available hain:\n\n${list}\n\nTamam collection yahan dekhein:\n🔗 ${toolResult.allProductsUrl}`;
+                }
               } else {
-                replyText = `Maazrat, aapki matlooba item filhal stock mein nahi hai. Hamara catalog yahan dekh saktay hain: https://${shop.domain}/collections/all-products`;
+                replyText = `Maazrat, aapki matlooba item filhal catalog mein nahi mili. Hamara poora catalog yahan dekh saktay hain: https://${shop.domain}/collections/all-products`;
               }
+            } else if (call.name === 'get_delivery_quote') {
+              replyText = `Delivery charges Rs. ${toolResult?.deliveryCharge || 199} hain aur delivery ${toolResult?.estimatedDelivery || '3-5 business days'} mein hoti hai.`;
             } else if (call.name === 'get_shopify_collections') {
               const list = (toolResult?.collections || []).map(c => `• *${c.title}*:\n🔗 ${c.url}`).join('\n\n');
               replyText = `Hamari collections yeh hain:\n\n${list}`;
@@ -536,7 +734,7 @@ Zara:`
             } else if (call.name === 'cancel_order') {
               replyText = `Aapka order #${recentOrder?.orderNumber || ''} cancel kar diya gaya hai. Shukriya!`;
             } else if (call.name === 'request_human_transfer') {
-              replyText = `Maine hamari human support team ko inform kar diya hai. Hamara representative jald hi aapse isi chat par rabta karega.`;
+              replyText = `Ji, main ne aapki request customer support ko bhej di hai. Hamari team aapse jald rabta karegi.`;
             }
           }
         } else {
@@ -546,18 +744,36 @@ Zara:`
         console.warn(`⚠️ [WhatsAppAgent] Gemini API unavailable or timed out (${aiErr.message}). Using safe conversational fallback.`);
         if (recentOrder) {
           replyText = `Assalam-o-Alaikum! Main Zara hoon ${storeName} se. Aapka order #${recentOrder.orderNumber} (Rs. ${recentOrder.totalAmount}) process mein hai. Confirm karne ke liye 1 aur cancel ke liye 2 reply karein.`;
-        } else {
+        } else if (shouldGreet) {
           replyText = `Assalam-o-Alaikum! Main Zara hoon ${storeName} se. Main aapki kya madad kar sakti hoon?`;
+        } else {
+          replyText = `Ji, main aapki request samajh gayi hoon. Kya aap mazeed details share kar sakte hain taake main sahi rehnumai kar sakoon?`;
         }
       }
     }
 
     if (!replyText) {
-      replyText = `Assalam-o-Alaikum! Main Zara hoon ${storeName} se. Aapka message receive ho gaya hai. Main aapki kya madad kar sakti hoon?`;
+      if (shouldGreet) {
+        replyText = `Assalam-o-Alaikum! Main Zara hoon ${storeName} se. Main aapki kya madad kar sakti hoon?`;
+      } else {
+        replyText = `Ji zaroor! Main aapki kya madad kar sakti hoon?`;
+      }
     }
 
-    // 9. Sanitize response (permanent zero-NaN guarantee)
+    // 9. Sanitize response (permanent zero-NaN and inventory status policy guarantee)
     replyText = this.sanitizeResponse(replyText);
+
+    // If customer did not ask about availability, strip accidental "Status: In Stock / Out of Stock"
+    const customerAskedStock = /\b(stock\s*hai|available\s*hai|available\?|mil\s*jayega|stock\s*mein\s*hai)\b/i.test(messageText);
+    if (!customerAskedStock) {
+      replyText = replyText.replace(/\b(Status:\s*(In\s*Stock|Out\s*of\s*Stock))\b/gi, '');
+      replyText = replyText.replace(/\baur yeh filhal (in stock|out of stock) hai\b/gi, '');
+      replyText = replyText.replace(/\bfilhal (in stock|out of stock) hai\b/gi, '');
+      replyText = replyText.replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    // Mark greeting delivered
+    await ConversationStateService.markGreetingSent(conversation.id);
 
     // 10. Persist assistant reply
     await prisma.message.create({
@@ -591,7 +807,7 @@ Zara:`
         await waClient.sendMessage(fromPhone, replyText, {
           quotedMessageId: messageId || undefined
         });
-        console.log(`✅ [WhatsAppAgent] Reply sent to ${fromPhone}: "${replyText.slice(0, 50)}..."`);
+        console.log(`✅ [WhatsAppAgent] Reply sent to ${fromPhone}: "${replyText.slice(0, 60)}..."`);
       }
     } catch (sendErr) {
       console.warn(`⚠️ [WhatsAppAgent] Notice on sending WhatsApp message: ${sendErr.message}`);
@@ -604,6 +820,18 @@ Zara:`
       intent: detected.intent,
       action: executedAction
     };
+  }
+
+  /**
+   * Sends an outbound voice note via WhatsApp (WA-AKG client)
+   */
+  static async sendWhatsAppVoiceNote(sessionId, to, audioBuffer, mimeType = 'audio/ogg; codecs=opus', options = {}) {
+    const waClient = new WhatsAppClient({
+      sessionId: String(sessionId),
+      baseUrl: process.env.WA_AKG_BASE_URL,
+      apiKey: process.env.WA_AKG_API_KEY
+    });
+    return waClient.sendMediaMessage(to, audioBuffer, 'voice', 'zara_voice_note.ogg', '', options);
   }
 }
 
