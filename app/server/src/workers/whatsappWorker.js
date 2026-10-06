@@ -3,6 +3,7 @@ import { prisma } from '../lib/db.js';
 import { waLogger } from '../utils/waLogger.js';
 import { parseMediaMetadata } from '../utils/mediaHandler.js';
 import { MessageTrackerService } from '../services/messageTracker.js';
+import { PhoneNormalizer } from '../services/phoneNormalizer.js';
 
 /**
  * Hardened WhatsApp BullMQ Worker
@@ -91,18 +92,13 @@ export async function processWhatsAppJob(job) {
   // ========================================================
   // 4. Customer Identity Mapping (Multi-Tenant Scoped)
   // ========================================================
-  const phone = jid.replace(/[^0-9]/g, '');
+  let phone = jid.replace(/[^0-9]/g, '');
   try {
-    const existingCustomer = await prisma.customer.findFirst({
-      where: { shopId, phone }
-    });
-    if (!existingCustomer) {
-      await prisma.customer.create({
-        data: { shopId, phone }
-      }).catch(() => {});
+    const customer = await PhoneNormalizer.resolveCustomer(shopId, jid);
+    if (customer?.phone) {
+      phone = customer.phone;
     }
   } catch (dbErr) {
-    // Non-fatal warning; Python AI Engine also verifies/creates customer context
     console.warn(`[WhatsAppWorker] Customer identity map notice:`, dbErr.message);
   }
 

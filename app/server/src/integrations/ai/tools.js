@@ -80,13 +80,43 @@ export const AITools = {
   },
   search_shopify_products: {
     name: 'search_shopify_products',
-    description: 'Search the store Shopify catalog for products when customer asks about another product, catalog availability, or pricing (e.g. "chair protection cover", "leather belt"). Returns factual matching product titles, prices, descriptions, and stock availability.',
+    description: 'Search the store Shopify catalog for products when customer asks about products, catalog, or browsing (e.g. "chair protection cover", "leather belt", "kitchen items", "catalog dikhao"). Returns matching product titles, prices, descriptions, URLs, and stock availability.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        query: { type: 'STRING', description: 'Product title, item name, or keywords to search in store catalog' }
+        query: { type: 'STRING', description: 'Product title, item name, or keywords to search in store catalog' },
+        page: { type: 'INTEGER', description: 'Page number for pagination (default: 1)' }
       },
       required: ['query']
+    }
+  },
+  get_shopify_product_details: {
+    name: 'get_shopify_product_details',
+    description: 'Retrieve authoritative price, availability, variants, description, and direct storefront product URL for a specific single product (e.g. when customer asks "Adhesive wall max ki price batao", "iska link do", "ye available hai").',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: { type: 'STRING', description: 'Name or keywords of the product (e.g. "Adhesive wall max")' },
+        handle: { type: 'STRING', description: 'Product handle if known (e.g. "1-pc-self-adhesive-wall-max")' }
+      }
+    }
+  },
+  get_shopify_collections: {
+    name: 'get_shopify_collections',
+    description: 'Fetch store product collections and their direct storefront links (e.g. when customer asks for "kitchen collection", "mobile accessories", "all products", "catalog link").',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        category: { type: 'STRING', description: 'Optional category keyword (e.g. "kitchen", "mobile", "women", "all")' }
+      }
+    }
+  },
+  get_store_info: {
+    name: 'get_store_info',
+    description: 'Retrieve general store details including storefront website URL, store name, and delivery policy (e.g. when customer asks "website ka link do", "store ka naam", "delivery charges").',
+    parameters: {
+      type: 'OBJECT',
+      properties: {}
     }
   },
   end_call: {

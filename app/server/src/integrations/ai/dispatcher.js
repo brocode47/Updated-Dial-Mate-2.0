@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import * as ordersApi from '../shopify/orders.js';
 import { searchShopifyProducts } from '../shopify/products.js';
+import { ShopifyCatalogService } from '../../services/shopifyCatalogService.js';
 import { OrderStateMachine, OrderStatus } from '../../services/OrderStateMachine.js';
 import { HumanEscalationService } from '../../services/humanEscalationService.js';
 import { prisma } from '../../lib/db.js';
@@ -53,8 +54,18 @@ export const toolSchemas = {
     reason: z.string().optional().default('human_requested')
   }),
   search_shopify_products: z.object({
-    query: z.string().describe('The product title or keywords to search for in store catalog')
+    query: z.string().describe('The product title or keywords to search for in store catalog'),
+    page: z.number().optional().default(1)
   }),
+  get_shopify_product_details: z.object({
+    query: z.string().optional(),
+    handle: z.string().optional(),
+    productId: z.string().optional()
+  }),
+  get_shopify_collections: z.object({
+    category: z.string().optional()
+  }),
+  get_store_info: z.object({}).passthrough(),
   end_call: z.object({
     reason: z.string().optional().default('conversation_completed')
   })
@@ -263,8 +274,20 @@ export async function dispatchToolCall(shopDomain, toolName, args, context = {})
         };
       }
       case 'search_shopify_products': {
-        const result = await searchShopifyProducts(shopDomain, validatedArgs.query);
+        const result = await ShopifyCatalogService.searchProducts(shopDomain, validatedArgs.query, { page: validatedArgs.page });
         return result;
+      }
+      case 'get_shopify_product_details': {
+        const result = await ShopifyCatalogService.getProductDetails(shopDomain, validatedArgs);
+        return { success: !!result, product: result };
+      }
+      case 'get_shopify_collections': {
+        const collections = await ShopifyCatalogService.getCollections(shopDomain, validatedArgs.category);
+        return { success: true, collections };
+      }
+      case 'get_store_info': {
+        const storeInfo = await ShopifyCatalogService.getStoreInfo(shopDomain);
+        return { success: true, ...storeInfo };
       }
       case 'end_call': {
         return {
