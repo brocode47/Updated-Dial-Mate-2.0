@@ -23,16 +23,12 @@ export async function GET(
         }
 
         // Find message in database
-        const message = await prisma.message.findUnique({
-            where: { id: messageId },
+        const message = await prisma.message.findFirst({
+            where: { sessionId, OR: [{ id: messageId }, { keyId: messageId }] },
         });
 
         if (!message) {
             return NextResponse.json({ status: false, message: "Message not found", error: "Message not found" }, { status: 404 });
-        }
-
-        if (message.sessionId !== sessionId) {
-            return NextResponse.json({ status: false, message: "Message does not belong to this session", error: "Message does not belong to this session" }, { status: 403 });
         }
 
         if (!message.mediaUrl) {
