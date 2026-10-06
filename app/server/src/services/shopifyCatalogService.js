@@ -201,18 +201,36 @@ export class ShopifyCatalogService {
       'kursiyo': ['chair', 'chairs'],
       'kursiyon': ['chair', 'chairs'],
       'chairs': ['chair'],
+      'paon': ['leg', 'legs', 'foot', 'feet'],
+      'paaon': ['leg', 'legs', 'foot', 'feet'],
+      'paye': ['leg', 'legs'],
+      'taang': ['leg', 'legs'],
+      'taangein': ['leg', 'legs'],
       'covers': ['cover'],
       'protectors': ['protector', 'protect', 'protection'],
-      'protection': ['protector', 'protect', 'cover'],
-      'kharrate': ['snoring', 'anti-snoring'],
-      'kharate': ['snoring', 'anti-snoring'],
-      'kharaton': ['snoring', 'anti-snoring'],
+      'protection': ['protector', 'protect', 'cover', 'guard', 'silicone'],
+      'protective': ['protection', 'protector', 'cover'],
+      'wooden': ['wood', 'wooden'],
+      'silicone': ['silicon', 'silicone'],
+      'silicon': ['silicone'],
+      'snoring': ['snoring', 'snore', 'anti-snoring'],
+      'snore': ['snoring', 'anti-snoring'],
+      'kharrate': ['snoring', 'anti-snoring', 'snore'],
+      'kharate': ['snoring', 'anti-snoring', 'snore'],
+      'kharaton': ['snoring', 'anti-snoring', 'snore'],
+      'rokne': ['anti', 'stop', 'prevent'],
+      'roknay': ['anti', 'stop', 'prevent'],
+      'cheez': ['item', 'kit', 'product'],
       'naak': ['nasal', 'nose'],
       'chashma': ['glasses', 'spectacles'],
       'jootay': ['shoes'],
       'joote': ['shoes'],
       'kapray': ['clothes'],
       'kapre': ['clothes'],
+      'kitchen': ['kitchen', 'cooking'],
+      'cleaning': ['clean', 'cleaning'],
+      'accessories': ['accessory', 'accessories'],
+      'mobile': ['mobile', 'phone'],
       'pankha': ['fan'],
       'darwaza': ['door'],
       'dewar': ['wall'],
@@ -240,16 +258,17 @@ export class ShopifyCatalogService {
 
     for (const p of allProducts) {
       const titleLower = p.title.toLowerCase();
+      const handleLower = (p.handle || '').toLowerCase();
       const descLower = (p.description || '').toLowerCase();
       const tagsLower = (p.tags || '').toLowerCase();
       const typeLower = (p.productType || '').toLowerCase();
 
       let score = 0;
 
-      // Exact title match
-      if (titleLower === queryLower) {
+      // Exact title or handle match
+      if (titleLower === queryLower || handleLower === queryLower) {
         score += 100;
-      } else if (titleLower.includes(queryLower)) {
+      } else if (titleLower.includes(queryLower) || handleLower.includes(queryLower)) {
         score += 60;
       }
 
@@ -258,6 +277,9 @@ export class ShopifyCatalogService {
       for (const token of searchTokens) {
         if (titleLower.includes(token)) {
           score += 25;
+          tokenMatches++;
+        } else if (handleLower.includes(token)) {
+          score += 20;
           tokenMatches++;
         } else if (tagsLower.includes(token) || typeLower.includes(token)) {
           score += 15;
@@ -340,6 +362,7 @@ export class ShopifyCatalogService {
       { title: 'Best Selling', handle: 'best-selling', url: `https://${storefrontDomain}/collections/best-selling` },
       { title: 'Kitchen Collections', handle: 'kitchen-collections', url: `https://${storefrontDomain}/collections/kitchen-collections` },
       { title: 'Mobile Accessories', handle: 'mobile-accessories', url: `https://${storefrontDomain}/collections/mobile-accessories` },
+      { title: 'Cleaning Products', handle: 'cleaning-products', url: `https://${storefrontDomain}/collections/cleaning-products` },
       { title: 'Women Collection', handle: 'women-collection', url: `https://${storefrontDomain}/collections/women-collection` }
     ];
 

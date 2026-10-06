@@ -29,26 +29,26 @@ export class HumanEscalationService {
     customerRequest = 'Customer wants to speak with a real person.',
     productContext = null,
     orderNumber = null,
-    conversationRef = 'Active WhatsApp Chat'
+    conversationRef = 'Active WhatsApp Chat',
+    reason = 'Customer requested human support'
   }) {
-    let msg = `🔔 *Human Support Request*\n\n` +
-      `*Customer:* ${customerName}\n` +
-      `*Phone:* ${customerPhone}\n` +
-      `*City:* ${customerCity}\n\n` +
-      `*Request:*\n` +
-      `${customerRequest}\n\n`;
+    let msg = `🔔 *Human Support Request*\n` +
+      `🚨 *CUSTOMER WANTS HUMAN SUPPORT*\n\n` +
+      `*Customer name:* ${customerName}\n` +
+      `*Customer phone:* ${customerPhone}\n` +
+      `*Current conversation:* ${conversationRef}\n` +
+      `*Reason:* ${reason}\n` +
+      `*Latest customer message:* "${customerRequest}"\n\n`;
 
     if (productContext) {
-      msg += `*Current context:*\n${productContext}\n\n`;
+      msg += `*Context:* ${productContext}\n\n`;
     }
 
     if (orderNumber) {
-      msg += `*Order:*\n#${orderNumber}\n\n`;
+      msg += `*Order:* #${orderNumber}\n\n`;
     }
 
-    msg += `*Conversation:*\n${conversationRef}\n\n` +
-      `Please contact the customer.`;
-
+    msg += `Please follow up with the customer directly.`;
     return msg;
   }
 

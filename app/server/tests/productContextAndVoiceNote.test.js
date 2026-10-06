@@ -789,4 +789,356 @@ describe('Dial Mate 2.0 — Product Context & Voice Reply Regression Suite', () 
       expect(textSpy).not.toHaveBeenCalled();
     });
   });
+
+  // =========================================================================
+  // Phase 20 — Real Customer Journey Deterministic Regression Tests (Tests A-K)
+  // =========================================================================
+  describe('Phase 20 — Customer Journey Suite (Tests A through K)', () => {
+    it('TEST A — PRODUCT: complete first answer (Price + Rs. 199 Delivery + Total Rs. 698 + Link + No Stock Status) and sticky context', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', firstName: 'Arslan', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-a', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      vi.spyOn(ShopifyCatalogService, 'searchProducts').mockResolvedValue({
+        success: true,
+        products: [mockProductChair],
+        totalFound: 1
+      });
+
+      // 1. Initial product inquiry
+      const res1 = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'Mujhe chair protection cover chaiye'
+      });
+
+      expect(res1.success).toBe(true);
+      expect(res1.replyText).toContain('Wooden Silicone Chair Protection Cover');
+      expect(res1.replyText).toContain('Product price: Rs. 499');
+      expect(res1.replyText).toContain('Delivery charges: Rs. 199');
+      expect(res1.replyText).toContain('Total: Rs. 698');
+      expect(res1.replyText).toContain(mockProductChair.url);
+      expect(res1.replyText).not.toMatch(/\b(in stock|out of stock|stock mein)\b/i);
+
+      // 2. Follow-up "delivery charges?" remains sticky on product
+      const res2 = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'delivery charges?'
+      });
+
+      expect(res2.success).toBe(true);
+      expect(res2.action).toBe('delivery_quote_fastpath');
+      expect(res2.replyText).toContain('Rs. 199');
+      expect(res2.replyText).not.toContain('order #');
+
+      // 3. Follow-up "iska total?"
+      const res3 = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'iska total?'
+      });
+
+      expect(res3.success).toBe(true);
+      expect(res3.action).toBe('total_inquiry_fastpath');
+      expect(res3.replyText).toContain('Rs. 698');
+    });
+
+    it('TEST B — REJECTION: rejected product is cleared and never recommended again', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-b', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      vi.spyOn(ShopifyCatalogService, 'searchProducts').mockResolvedValue({
+        success: true,
+        products: [mockProductChair],
+        totalFound: 1
+      });
+
+      // 1. Initial product
+      await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'chair protection cover chaiye'
+      });
+
+      // 2. Customer rejects
+      const resReject = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'nahi chahiye'
+      });
+
+      expect(resReject.intent).toBe('PRODUCT_REJECTION');
+
+      // 3. Customer asks for kitchen collection
+      const resKitchen = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'mujhe kitchen ke products batao'
+      });
+
+      expect(resKitchen.intent).toBe('COLLECTION');
+      expect(resKitchen.replyText).not.toContain('Wooden Silicone Chair Protection Cover');
+      expect(resKitchen.replyText).toContain('kitchen-collections');
+    });
+
+    it('TEST C — CASUAL: identity answers without escalation, friendly chitchat without product ads', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-c', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      // 1. "tumahra name kya hy"
+      const resName = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'tumahra name kya hy'
+      });
+
+      expect(resName.intent).toBe('BOT_IDENTITY');
+      expect(resName.replyText).toContain('Mera naam Zara hai');
+      expect(resName.action).not.toBe('request_human_transfer');
+
+      // 2. "mjhse friendship karogy?"
+      const resFriend = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'mjhse friendship karogy?'
+      });
+
+      expect(resFriend.intent).toBe('SOCIAL_FRIENDSHIP');
+      expect(resFriend.replyText).not.toContain('Anti Snoring');
+      expect(resFriend.replyText).not.toContain('Rs.');
+    });
+
+    it('TEST D — SLEEP: "mjhe neend nahi arahi" gives empathetic response, NEVER anti-snoring pitch', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-d', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'mjhe neend nahi arahi'
+      });
+
+      expect(res.intent).toBe('SOCIAL_CASUAL');
+      expect(res.action).toBe('social_casual');
+      expect(res.replyText).toContain('Aray, aisa hota hai');
+      expect(res.replyText).not.toContain('Anti Snoring');
+      expect(res.replyText).not.toContain('snoring');
+      expect(res.replyText).not.toContain('Rs.');
+    });
+
+    it('TEST E — COMPLAINT: "main kabhi ab sunday bazaar se shopping nahi karunga" triggers complaint retention', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', firstName: 'Arslan', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-e', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'main kabhi ab sunday bazaar se shopping nahi karunga'
+      });
+
+      expect(res.intent).toBe('CUSTOMER_COMPLAINT');
+      expect(res.action).toBe('customer_complaint_retention');
+      expect(res.replyText).toContain('afsos hai ke aapko hamari service se itni disappointment hui');
+      expect(res.replyText).toContain('human support team');
+      expect(res.replyText).not.toContain('Rs.');
+    });
+
+    it('TEST F — HUMAN ESCALATION: alerts owner once, Zara continues conversation, isTakeover remains false', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-f', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({
+        success: true,
+        notificationSent: true
+      });
+
+      // 1. "owner se baat karwao"
+      const resEsc = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'owner se baat karwao'
+      });
+
+      expect(resEsc.intent).toBe('HUMAN_TRANSFER');
+      expect(resEsc.handledByHuman).not.toBe(true);
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      expect(resEsc.replyText).toContain('customer support team ko forward kar di hai');
+
+      // 2. Next customer message: "chair protection cover ki price batao"
+      vi.spyOn(ShopifyCatalogService, 'searchProducts').mockResolvedValue({
+        success: true,
+        products: [mockProductChair],
+        totalFound: 1
+      });
+
+      const resNext = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'chair protection cover ki price batao'
+      });
+
+      expect(resNext.success).toBe(true);
+      expect(resNext.handledByHuman).not.toBe(true);
+      expect(resNext.replyText).toContain('Wooden Silicone Chair Protection Cover');
+      expect(resNext.replyText).toContain('Rs. 499');
+    });
+
+    it('TEST G — OWNER INFORMATION: "owner ka naam kya hy" answers informationally without escalation', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-g', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch');
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'owner ka naam kya hy'
+      });
+
+      expect(res.intent).toBe('OWNER_INFO');
+      expect(res.action).toBe('owner_info');
+      expect(res.replyText).toContain('Sunday Bazaaar Official hamari management team operate karti hai');
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('TEST H — OWNER CONTACT: "owner ka number do" escalates to team without leaking private number', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-h', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      vi.spyOn(WhatsAppClient.prototype, 'sendMessage').mockResolvedValue({});
+
+      const dispatchSpy = vi.spyOn(ToolDispatcher, 'dispatch').mockResolvedValue({
+        success: true,
+        notificationSent: true
+      });
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'owner ka number do'
+      });
+
+      expect(res.intent).toBe('HUMAN_TRANSFER');
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      expect(res.replyText).not.toContain(mockShop.ownerPhone);
+      expect(res.replyText).toContain('customer support team ko forward kar di hai');
+    });
+
+    it('TEST I — MIXED LANGUAGE: detects order-status intent from mixed Roman Urdu/English', () => {
+      const intentResult = WhatsAppAgentService.detectIntent(
+        'Mujhe apne order status ke barey main information required hai'
+      );
+      expect(intentResult.intent).toBe('ORDER_STATUS');
+    });
+
+    it('TEST J — VOICE INPUT: voice message input produces same complete answer as text', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue(mockShop);
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'c-1', phone: '923333255998' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-test-j', messages: [] });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+
+      vi.spyOn(ShopifyCatalogService, 'searchProducts').mockResolvedValue({
+        success: true,
+        products: [mockProductChair],
+        totalFound: 1
+      });
+
+      const mediaSpy = vi.spyOn(WhatsAppClient.prototype, 'sendMediaMessage').mockResolvedValue({ status: true });
+
+      vi.spyOn(TextToSpeechService, 'synthesize').mockResolvedValue({
+        success: true,
+        buffer: Buffer.from('RIFF mock wav'),
+        format: 'ogg',
+        durationSeconds: 3.5
+      });
+
+      const res = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'sundaybazaaar.store',
+        sessionId: '2cmrlo',
+        fromPhone: '923333255998@s.whatsapp.net',
+        messageText: 'Mera chair protection cover ka price batao aur delivery charges bhi batao.',
+        isVoiceInbound: true
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.replyText).toContain('Wooden Silicone Chair Protection Cover');
+      expect(res.replyText).toContain('Rs. 499');
+      expect(res.replyText).toContain('Rs. 199');
+      expect(mediaSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('TEST K — VOICE OUTPUT: speech cleaning produces natural female dialogue without duplicate charges', () => {
+      const rawResponse = `Ji, *Wooden Silicone Chair Protection Cover* available hai.\n\nProduct price: Rs. 499\nDelivery charges: Rs. 199\nTotal: Rs. 698\n\nDelivery charges: Rs. 199\n\nProduct dekhne ke liye:\n🔗 https://sundaybazaaar.store/products/chair\n\nCustomer: mujhe chair cover chahiye`;
+      const cleaned = TextToSpeechService.cleanTextForSpeech(rawResponse);
+
+      expect(cleaned).not.toContain('https://');
+      expect(cleaned).not.toContain('🔗');
+      expect(cleaned).not.toContain('Customer:');
+      expect(cleaned).toContain('499 rupay');
+      expect(cleaned).toContain('199 rupay');
+      // Verify no duplicate delivery charge repetition
+      const matches = cleaned.match(/199 rupay/g);
+      expect(matches.length).toBeLessThanOrEqual(2); // One for delivery, one for total
+    });
+  });
 });
