@@ -168,17 +168,21 @@ export class WhatsAppClient {
   }
 
   /**
-   * Request session restart / reconnect on WA-AKG
+   * Send presence update (e.g. 'composing', 'paused') to indicate typing
    */
-  async restartSession(sessionId = null) {
-    if (!this.apiKey) throw new Error('API key not configured');
-    const targetSession = this._resolveSessionId({ sessionId });
-    const url = `${this.baseUrl}/api/sessions/${targetSession}/restart`;
-
-    const response = await axios.post(url, {}, {
-      headers: { 'x-api-key': this.apiKey },
-      timeout: 5000
-    });
-    return response.data;
+  async sendPresence(to, presence = 'composing', options = {}) {
+    if (!this.apiKey) return;
+    try {
+      const sessionId = this._resolveSessionId(options);
+      const jid = this._formatJid(to);
+      const url = `${this.baseUrl}/api/chat/${sessionId}/${encodeURIComponent(jid)}/presence`;
+      await axios.post(url, { presence }, {
+        headers: { 'x-api-key': this.apiKey },
+        timeout: 3000
+      });
+    } catch (err) {
+      // Non-fatal presence notice
+    }
   }
 }
+

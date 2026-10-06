@@ -87,6 +87,23 @@ export class WhatsAppAgentService {
       return { intent: 'CONFIRM', confidence: 0.90 };
     }
 
+    // 4. Deterministic fast-path queries for active orders (must be specific, not general)
+    if (/\b(delivery\s*charges|shipping\s*charges|delivery\s*ke\s*kitne|delivery\s*cost)\b/i.test(clean)) {
+      return { intent: 'ORDER_DELIVERY_CHARGES', confidence: 0.95 };
+    }
+
+    if (/\b(iska\s*total|total\s*kitna|total\s*bill|kitne\s*paise|total\s*amount|cod\s*amount|kitna\s*bill)\b/i.test(clean)) {
+      return { intent: 'ORDER_TOTAL', confidence: 0.95 };
+    }
+
+    if (/\b(order\s*status|status\s*kya\s*hai|status\s*batao|order\s*kahan\s*tak)\b/i.test(clean)) {
+      return { intent: 'ORDER_STATUS', confidence: 0.95 };
+    }
+
+    if (/\b(mera\s*order\s*kya\s*hai|kya\s*order\s*hai|order\s*details|kya\s*order\s*kiya|kya\s*mangwaya)\b/i.test(clean)) {
+      return { intent: 'ORDER_SUMMARY', confidence: 0.95 };
+    }
+
     // Product search inquiries
     if (/\b(product|item|price|kya hai|available|stock|dusra|aur|cover|belt|shoes|shirt|suit|rate)\b/i.test(clean)) {
       return { intent: 'PRODUCT_INQUIRY', confidence: 0.85 };
@@ -124,6 +141,17 @@ export class WhatsAppAgentService {
 
     const rawPhone = String(fromPhone || '').split('@')[0];
     const cleanPhone = OrderEligibilityService.cleanPhoneNumber(rawPhone) || rawPhone.replace(/[^0-9]/g, '');
+
+    // Initialize WA Client and immediately signal typing presence (non-blocking)
+    const waClient = new WhatsAppClient({
+      baseUrl: process.env.WA_AKG_BASE_URL,
+      apiKey: process.env.WA_AKG_API_KEY,
+      sessionId: String(sessionId || ''),
+      shopId: String(shop.id)
+    });
+    if (typeof waClient?.sendPresence === 'function') {
+      waClient.sendPresence(fromPhone, 'composing').catch(() => {});
+    }
 
     // 2. Find or Create Customer
     let customer = await prisma.customer.findFirst({
@@ -216,11 +244,15 @@ export class WhatsAppAgentService {
       if (!payload || typeof payload !== 'object') payload = {};
 
       const itemTitles = (payload.line_items || []).map(i => i.title || i.name).join(', ') || 'item';
+      const shippingLines = payload.shipping_lines || [];
+      const shippingFee = shippingLines.length > 0 ? Number(shippingLines[0].price || 0) : 0;
+
       orderContext = {
         orderId: recentOrder.id,
         orderNumber: recentOrder.orderNumber || payload.order_number || recentOrder.id.slice(0, 6),
         status: recentOrder.status,
         totalAmount: recentOrder.totalAmount,
+        shippingFee,
         items: itemTitles
       };
     }
@@ -266,8 +298,24 @@ export class WhatsAppAgentService {
       });
       executedAction = 'request_human_transfer';
       replyText = `Maine hamari human support team ko inform kar diya hai. Hamara representative jald hi aapse isi WhatsApp chat par rabta karega. Shukriya!`;
+    } else if (detected.intent === 'ORDER_SUMMARY' && orderContext) {
+      executedAction = 'order_summary_fastpath';
+      replyText = `Aapka order #${orderContext.orderNumber} hai jisme "${orderContext.items}" shamil hai. Iska kul COD bill Rs. ${Number(orderContext.totalAmount).toLocaleString()} hai aur status "${orderContext.status}" hai.`;
+    } else if (detected.intent === 'ORDER_TOTAL' && orderContext) {
+      executedAction = 'order_total_fastpath';
+      replyText = `Aapke order #${orderContext.orderNumber} ka kul COD total Rs. ${Number(orderContext.totalAmount).toLocaleString()} hai.`;
+    } else if (detected.intent === 'ORDER_DELIVERY_CHARGES' && orderContext) {
+      executedAction = 'order_delivery_charges_fastpath';
+      if (orderContext.shippingFee > 0) {
+        replyText = `Aapke order #${orderContext.orderNumber} ke delivery charges Rs. ${Number(orderContext.shippingFee).toLocaleString()} hain. Kul bill Rs. ${Number(orderContext.totalAmount).toLocaleString()} hai.`;
+      } else {
+        replyText = `Aapke order #${orderContext.orderNumber} par standard delivery bilkul free hai! Kul bill Rs. ${Number(orderContext.totalAmount).toLocaleString()} hai.`;
+      }
+    } else if (detected.intent === 'ORDER_STATUS' && orderContext) {
+      executedAction = 'order_status_fastpath';
+      replyText = `Aapke order #${orderContext.orderNumber} ka current status "${orderContext.status}" hai.`;
     } else {
-      // 8. Conversational Gemini AI Engine
+      // 8. Conversational Gemini AI Engine (Low Latency with Bounded Timeout)
       try {
         const aiClient = getAIClient();
         const availableTools = [
@@ -310,14 +358,23 @@ Rules:
 Zara:`
         );
 
-        const response = await aiClient.models.generateContent({
-          model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+        const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+        const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '8000', 10);
+
+        const geminiCall = aiClient.models.generateContent({
+          model: geminiModel,
           contents: prompt,
           config: {
             systemInstruction,
             tools: [{ functionDeclarations: availableTools }]
           }
         });
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`Gemini API timed out after ${timeoutMs}ms`)), timeoutMs);
+        });
+
+        const response = await Promise.race([geminiCall, timeoutPromise]);
 
         usedLLM = true;
 
@@ -358,7 +415,7 @@ Zara:`
           replyText = response.text || candidate?.content?.parts?.find(p => p.text)?.text || '';
         }
       } catch (aiErr) {
-        console.warn(`⚠️ [WhatsAppAgent] Gemini API unavailable (${aiErr.message}). Using safe conversational fallback.`);
+        console.warn(`⚠️ [WhatsAppAgent] Gemini API unavailable or timed out (${aiErr.message}). Using safe conversational fallback.`);
         if (orderContext) {
           replyText = `Assalam-o-Alaikum! Main Zara hoon ${storeName} se. Aapka order #${orderContext.orderNumber} (Rs. ${orderContext.totalAmount}) process mein hai. Confirm karne ke liye 1 aur cancel ke liye 2 reply karein.`;
         } else {
@@ -390,7 +447,7 @@ Zara:`
         detectedAgent: 'Zara',
         intent: detected.intent,
         action: executedAction || 'REPLY',
-        modelUsed: usedLLM ? (process.env.GEMINI_MODEL || 'gemini-3.8-flash') : 'rule_engine',
+        modelUsed: usedLLM ? (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite') : 'rule_engine',
         usedLLM,
         responseTimeMs: Date.now() - startTime,
         status: 'SUCCESS'
@@ -399,13 +456,6 @@ Zara:`
 
     // 11. Send reply via WA-AKG Client
     try {
-      const waClient = new WhatsAppClient({
-        baseUrl: process.env.WA_AKG_BASE_URL,
-        apiKey: process.env.WA_AKG_API_KEY,
-        sessionId: String(sessionId),
-        shopId: String(shop.id)
-      });
-
       if (typeof waClient?.sendMessage === 'function') {
         await waClient.sendMessage(fromPhone, replyText, {
           quotedMessageId: messageId || undefined

@@ -543,5 +543,165 @@ describe('Dial Mate 2.0 — Production SaaS Hardening & WhatsApp Customer Agent'
         })
       }));
     });
+
+    it('responds via deterministic fast-path for ORDER_SUMMARY without LLM', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'test.myshopify.com', name: 'Test Store' });
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '923001234567' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({
+        id: 'ord-fast-1',
+        orderNumber: '1643',
+        status: 'Confirmed',
+        totalAmount: 1198,
+        payload: JSON.stringify({
+          line_items: [{ title: 'Magnetic Nasal Dilator' }],
+          shipping_lines: [{ price: '0' }]
+        })
+      });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      const logSpy = vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      const getAISpy = vi.spyOn(aiClientModule, 'getAIClient');
+
+      const result = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'test.myshopify.com',
+        sessionId: '2cmrlo',
+        fromPhone: '923001234567@s.whatsapp.net',
+        messageText: 'mera order kya hai?'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.action).toBe('order_summary_fastpath');
+      expect(result.replyText).toContain('#1643');
+      expect(result.replyText).toContain('Magnetic Nasal Dilator');
+      expect(result.replyText).toContain('1,198');
+      expect(getAISpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          usedLLM: false,
+          modelUsed: 'rule_engine'
+        })
+      }));
+    });
+
+    it('responds via deterministic fast-path for ORDER_TOTAL without LLM', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'test.myshopify.com' });
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '923001234567' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({
+        id: 'ord-fast-2',
+        orderNumber: '1643',
+        status: 'Pending',
+        totalAmount: 2500
+      });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      const getAISpy = vi.spyOn(aiClientModule, 'getAIClient');
+
+      const result = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'test.myshopify.com',
+        sessionId: '2cmrlo',
+        fromPhone: '923001234567@s.whatsapp.net',
+        messageText: 'iska total kitna hai?'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.action).toBe('order_total_fastpath');
+      expect(result.replyText).toContain('Rs. 2,500');
+      expect(getAISpy).not.toHaveBeenCalled();
+    });
+
+    it('responds via deterministic fast-path for ORDER_DELIVERY_CHARGES without LLM', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'test.myshopify.com' });
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '923001234567' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({
+        id: 'ord-fast-3',
+        orderNumber: '1643',
+        status: 'Pending',
+        totalAmount: 1198,
+        payload: JSON.stringify({
+          shipping_lines: [{ price: '200' }]
+        })
+      });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      const getAISpy = vi.spyOn(aiClientModule, 'getAIClient');
+
+      const result = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'test.myshopify.com',
+        sessionId: '2cmrlo',
+        fromPhone: '923001234567@s.whatsapp.net',
+        messageText: 'delivery charges kitne hain?'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.action).toBe('order_delivery_charges_fastpath');
+      expect(result.replyText).toContain('Rs. 200');
+      expect(getAISpy).not.toHaveBeenCalled();
+    });
+
+    it('responds via deterministic fast-path for ORDER_STATUS without LLM', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'test.myshopify.com' });
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '923001234567' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({
+        id: 'ord-fast-4',
+        orderNumber: '1643',
+        status: 'Confirmed',
+        totalAmount: 1198
+      });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+      const getAISpy = vi.spyOn(aiClientModule, 'getAIClient');
+
+      const result = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'test.myshopify.com',
+        sessionId: '2cmrlo',
+        fromPhone: '923001234567@s.whatsapp.net',
+        messageText: 'mera order status kya hai?'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.action).toBe('order_status_fastpath');
+      expect(result.replyText).toContain('Confirmed');
+      expect(getAISpy).not.toHaveBeenCalled();
+    });
+
+    it('safely triggers conversational fallback when Gemini API times out or errors', async () => {
+      vi.spyOn(prisma.shop, 'findUnique').mockResolvedValue({ id: 'shop-1', domain: 'test.myshopify.com', name: 'Sunday Bazaar' });
+      vi.spyOn(prisma.customer, 'findFirst').mockResolvedValue({ id: 'cust-1', phone: '923001234567' });
+      vi.spyOn(prisma.conversation, 'findFirst').mockResolvedValue({ id: 'conv-1', isTakeover: false, messages: [] });
+      vi.spyOn(prisma.order, 'findFirst').mockResolvedValue({
+        id: 'ord-timeout',
+        orderNumber: '1643',
+        status: 'Pending Confirmation',
+        totalAmount: 1198
+      });
+      vi.spyOn(prisma.message, 'create').mockResolvedValue({});
+      vi.spyOn(prisma.aIInteractionLog, 'create').mockResolvedValue({});
+
+      // Mock Gemini throwing timeout / 503 error
+      vi.spyOn(aiClientModule, 'getAIClient').mockReturnValue({
+        models: {
+          generateContent: vi.fn().mockRejectedValue(new Error('503 UNAVAILABLE: Model experiencing high demand'))
+        }
+      });
+
+      const result = await WhatsAppAgentService.handleIncomingMessage({
+        shopId: 'shop-1',
+        shopDomain: 'test.myshopify.com',
+        sessionId: '2cmrlo',
+        fromPhone: '923001234567@s.whatsapp.net',
+        messageText: 'Ye parcel kab pohnchega agar barish ho gayi?'
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.replyText).toContain('Zara hoon Sunday Bazaar se');
+      expect(result.replyText).toContain('order #1643');
+    });
   });
 });
