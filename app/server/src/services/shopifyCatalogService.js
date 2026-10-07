@@ -1,3 +1,4 @@
+﻿import { ProductSummaryService } from './productSummaryService.js';
 import { getShopifyClient } from '../integrations/shopify/client.js';
 import { prisma } from '../lib/db.js';
 
@@ -75,7 +76,7 @@ export class ShopifyCatalogService {
       });
       rawProducts = response.body?.products || [];
     } catch (err) {
-      console.warn(`⚠️ [ShopifyCatalogService] REST load failed for ${shopDomain}: ${err.message}. Checking DB.`);
+      console.warn(`âš ï¸ [ShopifyCatalogService] REST load failed for ${shopDomain}: ${err.message}. Checking DB.`);
       try {
         const dbProducts = await prisma.product.findMany({
           where: { shop: { domain: shopDomain } },
@@ -101,7 +102,7 @@ export class ShopifyCatalogService {
           };
         });
       } catch (dbErr) {
-        console.warn(`⚠️ [ShopifyCatalogService] DB fallback failed: ${dbErr.message}`);
+        console.warn(`âš ï¸ [ShopifyCatalogService] DB fallback failed: ${dbErr.message}`);
       }
     }
 

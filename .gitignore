@@ -23,3 +23,10 @@ app/**/.agents/
 app/**/.claude/
 app/**/.cursor/
 app/**/.devin/
+
+# database & local artifacts
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+/dist/
+/server/
