@@ -19,6 +19,10 @@ const ESCALATION_DEDUPE_TTL_MS = 10 * 60 * 1000; // 10 minutes
  * 6. Guarantees truthful customer messaging (never claims live transfer when only notification occurred).
  */
 export class HumanEscalationService {
+  static async requestHumanEscalation(params = {}) {
+    return this.escalate(params);
+  }
+
   static async escalateToHuman(params = {}) {
     return this.escalate(params);
   }

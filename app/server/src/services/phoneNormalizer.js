@@ -212,32 +212,30 @@ export class PhoneNormalizer {
 
     let rawOrders = [];
     try {
-      if (process.env.NODE_ENV === 'test') {
+      let many = null;
+      try {
+        if (typeof prisma.order.findMany === 'function') {
+          many = await prisma.order.findMany({
+            where: { shopId, OR: orConditions },
+            orderBy: { createdAt: 'desc' },
+            take: 5
+          });
+        }
+      } catch (_) {}
+
+      if (many && Array.isArray(many) && many.length > 0) {
+        rawOrders = many;
+      } else if (typeof prisma.order.findFirst === 'function') {
         const single = await prisma.order.findFirst({
-          where: {
-            shopId,
-            OR: orConditions
-          },
+          where: { shopId, OR: orConditions },
           orderBy: { createdAt: 'desc' }
         });
         if (single) rawOrders = [single];
-      } else {
-        rawOrders = await prisma.order.findMany({
-          where: {
-            shopId,
-            OR: orConditions
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 5
-        });
       }
     } catch (e) {
       try {
         const single = await prisma.order.findFirst({
-          where: {
-            shopId,
-            OR: orConditions
-          },
+          where: { shopId, OR: orConditions },
           orderBy: { createdAt: 'desc' }
         });
         if (single) rawOrders = [single];
