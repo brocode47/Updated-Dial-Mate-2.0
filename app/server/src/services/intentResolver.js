@@ -149,8 +149,9 @@ export class IntentResolver {
 
     // 5. Customer Order Status Queries ("mera order kahan pohcha", "order status", etc.)
     if (
-      /\b((?:order|parcel|package)\s*(?:status|tracking|(?:kahan|kidhar)\s*(?:poh[ae]?n?ch\w*|pahn?ch\w*|tak))|status\s*kya\s*hai|status\s*batao|status\s*btao|tracking\s*batao|parcel\s*ka\s*status|order\s*confirm\s*hua|cancel\s*hua)\b/i.test(clean) ||
-      /\b(?:order|parcel)\s*(?:kahan|kidhar)\s*poh[ae]?n?ch/i.test(clean)
+      /\b((?:order|parcel|package)\s*(?:ka|ki|ke)?\s*(?:status|tracking|(?:kahan|kidhar)\s*(?:poh[ae]?n?ch\w*|pahn?ch\w*|tak))|status\s*kya\s*hai|status\s*(?:batao|btao|chahiye|required)|tracking\s*batao|parcel\s*ka\s*status|order\s*confirm\s*hua|cancel\s*hua)\b/i.test(clean) ||
+      /\b(?:order|parcel)\s*(?:kahan|kidhar)\s*poh[ae]?n?ch/i.test(clean) ||
+      (/\border\b/i.test(clean) && /\bstatus\b/i.test(clean))
     ) {
       return { intent: 'ORDER_STATUS', confidence: 0.98 };
     }
@@ -209,7 +210,7 @@ export class IntentResolver {
 
     // 11. Ordinal or Contextual Product References (e.g. "iska price?", "iski price?", "iska link", "pehle wale", "doosre wale", "ye wala kitne ka?")
     if (
-      (/\b(pehle\s*wale|doosre\s*wale|dusre\s*wale|teesre|tisre|chothe|paanchwe|1st|2nd|3rd|number\s*1|number\s*2|ye\s*wala|yeh\s*wala|pehly\s*walay|woh\s*wala|doosra\s*wala|last\s*wala|iska\s*link|iski\s*link)\b/i.test(clean) ||
+      (/\b(pehle\s*wale|doosre\s*wale|dusre\s*wale|teesre|tisre|chothe|paanchwe|1st|2nd|3rd|number\s*1|number\s*2|yeh?\s*wal[ae]y?|pehly\s*walay|woh?\s*wal[ae]y?|doosra\s*wala|last\s*wala|iska\s*link|iski\s*link)\b/i.test(clean) ||
        /\b(iska|iski)\s*price\?/i.test(clean)) &&
       !/\b(order|confirm|cnfrm)\b/i.test(clean)
     ) {
@@ -335,7 +336,10 @@ export class IntentResolver {
     }
 
     // 21. Product Inquiry Keywords
-    if (/\b(product|item|cover|belt|shoes|shirt|suit|wall\s*max|chair|kursi|snoring|dilator|kharat[eo]n?|kharate|silicone|protection)\b/i.test(clean)) {
+    if (
+      /\b(product|item|cover|belt|shoes|shirt|suit|wall\s*max|chair|kursi|snoring|dilator|kharat[eo]n?|kharate|silicone|protection|brush|bottle|bottal|mat|cleaner|cleaning|lunch\s*box|cutter|chopper|mop|dispenser|stand|holder|light|fan|watch)\b/i.test(clean) ||
+      (/\b(dikhao|dikha\s*do|dikha\s*dein|dikhana|dikha\s*bhejo|show\s*me|mujhe\s*.*chahiye)\b/i.test(clean) && !/\b(order|parcel|booking|status|cancel|confirm)\b/i.test(clean))
+    ) {
       return { intent: 'PRODUCT_INQUIRY', confidence: 0.90 };
     }
 

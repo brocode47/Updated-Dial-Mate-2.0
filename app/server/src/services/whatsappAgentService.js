@@ -410,7 +410,11 @@ export class WhatsAppAgentService {
       } else {
         toolResults.push(`No matching orders found`);
         if (!extracted.name && !extracted.city) {
-          replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
+          if (cleanMsg.includes('kya hai') || cleanMsg === 'mera order kya hai') {
+            replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
+          } else {
+            replyText = `Maazrat, aapke number se koi matching order record mein nahi mila. Baraye meharbani apna order number share karein taake main check kar sakoon.`;
+          }
         } else {
           const detailParts = [];
           if (extracted.name) detailParts.push(`naam: ${extracted.name}`);
@@ -705,8 +709,9 @@ export class WhatsAppAgentService {
             .replace(/\b(mera|meri|mere|ka|ki|ke|price|rate|delivery|charges|charges\?|batao|btao|bhi|kitne|hai|hain)\b/gi, '')
             .trim();
           if (cleanQuery) {
-            const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
-            prod = searchRes.products?.[0] || null;
+            const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 5 });
+            const nonRejected = (searchRes.products || []).filter(p => !ConversationStateService.isRejected(state, p));
+            prod = nonRejected[0] || null;
           }
         }
         if (prod) {
@@ -750,8 +755,9 @@ export class WhatsAppAgentService {
           if (cleanQuery) {
             routingDecision.catalogSearch = true;
             toolsCalled.push(`ShopifyCatalogService.searchProducts("${cleanQuery}")`);
-            const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
-            prod = searchRes.products?.[0] || null;
+            const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 5 });
+            const nonRejected = (searchRes.products || []).filter(p => !ConversationStateService.isRejected(state, p));
+            prod = nonRejected[0] || null;
             toolResults.push(prod ? `Found ${prod.title}` : 'No products found');
             if (prod) {
               await ConversationStateService.setActiveProduct(conversationKey, prod);
@@ -797,8 +803,9 @@ export class WhatsAppAgentService {
         if (cleanQuery && !isPronounQuery) {
           routingDecision.catalogSearch = true;
           toolsCalled.push(`ShopifyCatalogService.searchProducts("${cleanQuery}")`);
-          const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
-          prod = searchRes.products?.[0] || null;
+          const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 5 });
+          const nonRejected = (searchRes.products || []).filter(p => !ConversationStateService.isRejected(state, p));
+          prod = nonRejected[0] || null;
           toolResults.push(prod ? `Found ${prod.title}` : 'No products found');
         }
       }
@@ -838,8 +845,9 @@ export class WhatsAppAgentService {
         .trim();
       const targetQuery = cleanQuery || (candidateProduct ? candidateProduct.title : messageText);
       toolsCalled.push(`ShopifyCatalogService.searchProducts("${targetQuery}")`);
-      const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, targetQuery, { limit: 1 });
-      const foundProduct = searchRes.products?.[0] || candidateProduct;
+      const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, targetQuery, { limit: 5 });
+      const nonRejected = (searchRes.products || []).filter(p => !ConversationStateService.isRejected(state, p));
+      const foundProduct = nonRejected[0] || (candidateProduct && !ConversationStateService.isRejected(state, candidateProduct) ? candidateProduct : null);
       toolResults.push(foundProduct ? `Found ${foundProduct.title}` : 'No products found');
 
       if (foundProduct) {
@@ -882,17 +890,9 @@ export class WhatsAppAgentService {
         replyText = `Aapki request hamari human support team ko pehle hi bhej di gayi hai, woh jald rabta karegi. Tab tak main aapki madad ke liye yahin hoon — aap kya poochna chahte hain?`;
       } else {
         executedAction = 'request_human_transfer';
-        await ToolDispatcher.dispatch('request_human_transfer', {
+        const escalationContext = {
+          shopDomain: shop.domain,
           orderId: (activeOrder?.id || recentOrder?.id),
-          reason: 'Customer requested human support via WhatsApp'
-        }, {
-          shopDomain: shop.domain,
-          orderId: (activeOrder?.id || recentOrder?.id)
-        }).catch(() => {});
-
-        await HumanEscalationService.escalateToHuman({
-          shopDomain: shop.domain,
-          reason: 'Customer explicitly requested to speak with owner / live human agent',
           customerPhone: cleanPhone,
           customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : (state.customerName || null),
           customerCity: customer?.city || state.customerCity || null,
@@ -900,6 +900,17 @@ export class WhatsAppAgentService {
           activeOrder: activeOrder ? activeOrder.orderNumber : null,
           conversationSummary: `Customer (${cleanPhone}) requested human agent. Active product: ${activeProduct?.title || 'None'}, Order: ${activeOrder?.orderNumber || 'None'}. Last message: "${messageText}"`,
           conversationId: conversation.id
+        };
+
+        await ToolDispatcher.dispatch('request_human_transfer', {
+          orderId: (activeOrder?.id || recentOrder?.id),
+          reason: 'Customer requested human support via WhatsApp'
+        }, escalationContext).catch(() => {});
+
+        await HumanEscalationService.escalateToHuman({
+          shopDomain: shop.domain,
+          reason: 'Customer explicitly requested to speak with owner / live human agent',
+          ...escalationContext
         }).catch(() => ({ escalated: true, alreadyEscalated: false }));
 
         await ConversationStateService.markHumanEscalation(conversationKey, {
