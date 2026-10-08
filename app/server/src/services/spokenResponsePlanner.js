@@ -100,6 +100,14 @@ export class SpokenResponsePlanner {
         };
       }
 
+      if (asksTotal) {
+        return {
+          spokenText: `Ji, ${names.shortSpokenName} ki price ${priceNum} rupay aur delivery ${deliveryNum} rupay mila kar kul total ${totalNum.toLocaleString()} rupay banta hai.`,
+          sendTextLink: false,
+          textLinkMessage: null
+        };
+      }
+
       // Comprehensive conversational voice pitch
       const spoken = `Ji, ${names.shortSpokenName} ki price ${priceNum} rupay hai. Delivery ${deliveryNum} ki hai, to total ${totalNum.toLocaleString()} rupay banta hai. ${benefit} Agar aap chahein to main iska link bhi bhej deti hoon.`;
 

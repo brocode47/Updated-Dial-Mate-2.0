@@ -72,14 +72,20 @@ export class OrderStateMachine {
     if (shopifyOrderId) {
       try {
         if (newStatus === OrderStatus.CONFIRMED) {
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CONFIRMED');
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Confirmed');
+          const t1 = await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CONFIRMED');
+          const t2 = await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Confirmed');
+          const success = Boolean(t1 || t2);
+          console.log(`🏷️ [Shopify:Tag] Applied confirmation tags to order #${order.orderNumber || shopifyOrderId}: ${success ? 'SUCCESS' : 'FAILED_OR_SKIPPED'}`);
         } else if (newStatus === OrderStatus.CANCELLED) {
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CANCELLED');
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Cancel Requested');
+          const t1 = await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CANCELLED');
+          const t2 = await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Cancel Requested');
+          const success = Boolean(t1 || t2);
+          console.log(`🏷️ [Shopify:Tag] Applied cancellation tags to order #${order.orderNumber || shopifyOrderId}: ${success ? 'SUCCESS' : 'FAILED_OR_SKIPPED'}`);
         } else if (newStatus === OrderStatus.HUMAN_REQUIRED) {
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'HUMAN_REVIEW_NEEDED');
-          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Escalated');
+          const t1 = await addOrderTag(order.shop.domain, shopifyOrderId, 'HUMAN_REVIEW_NEEDED');
+          const t2 = await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Escalated');
+          const success = Boolean(t1 || t2);
+          console.log(`🏷️ [Shopify:Tag] Applied escalation tags to order #${order.orderNumber || shopifyOrderId}: ${success ? 'SUCCESS' : 'FAILED_OR_SKIPPED'}`);
         }
       } catch (err) {
         console.warn(`⚠️ Could not sync tag for ${newStatus} to Shopify (Order ${shopifyOrderId}):`, err.message);

@@ -69,8 +69,7 @@ export class CheckoutStateMachine {
       // Strip any operational instructions or directory search phrases
       candidateAddr = candidateAddr.replace(/\s*(?:apne|apni)?\s*(?:directory|check\s*karo|status|batao|btao|details?|record|mein|main|se|jo\s*order).*$/i, '').trim();
       candidateAddr = candidateAddr.replace(/\s+(?:hai|hy|he|h)$/i, '').trim();
-      const isJustCity = PAKISTAN_CITIES.some(c => candidateAddr.toLowerCase() === c);
-      if (candidateAddr.length > 5 && !isJustCity) {
+      if (candidateAddr.length >= 3) {
         extracted.address = candidateAddr;
       }
     } else {
@@ -96,7 +95,7 @@ export class CheckoutStateMachine {
     if (!checkoutState.customerName) missing.push('name');
     if (!checkoutState.customerPhone) missing.push('phone');
     if (!checkoutState.city) missing.push('city');
-    if (!checkoutState.address || checkoutState.address.length < 8) missing.push('address');
+    if (!checkoutState.address || checkoutState.address.length < 3) missing.push('address');
     return missing;
   }
 
@@ -157,24 +156,22 @@ export class CheckoutStateMachine {
 
     const prodNames = ProductSummaryService.normalizeProductName(product.title);
 
-    // If missing name or phone or address
+    // If missing name or phone or address or city
     if (missing.length > 0) {
-      let prompt = '';
-      const prodSummary = `*${prodNames.customerFriendlyName}* (Price: Rs. ${price}, Delivery: Rs. ${deliveryCharge}, Total: Rs. ${total})`;
+      const knownParts = [];
+      if (customerName) knownParts.push(`Naam: ${customerName}`);
+      if (city) knownParts.push(`City: ${city}`);
+      if (customerPhone) knownParts.push(`Phone: ${customerPhone}`);
+      if (address) knownParts.push(`Address: ${address}`);
 
-      if (missing.includes('name') && missing.includes('address')) {
-        prompt = `Ji bilkul! Aap ${prodSummary} order karna chahtay hain. Order book karne ke liye apna naam, complete delivery address aur city share kar dein.`;
-      } else if (missing.includes('address')) {
-        const namePart = customerName ? `Aapka naam ${customerName} note ho gaya hai. ` : '';
-        const cityPart = city ? `City ${city} ke liye ` : '';
-        prompt = `Ji bilkul! ${namePart}${cityPart}baraye meharbani apna mukammal house/street delivery address share kar dein taake order book ho sake.`;
-      } else if (missing.includes('city')) {
-        prompt = `Ji, baraye meharbani apni city (shehar) ka naam bata dein jahan delivery karni hai.`;
-      } else if (missing.includes('name')) {
-        prompt = `Ji, baraye meharbani apna naam bata dein jiske naam par parcel book karna hai.`;
-      } else if (missing.includes('phone')) {
-        prompt = `Ji, baraye meharbani apna contact phone number share kar dein jahan courier rider rabta kar sake.`;
-      }
+      const missingLabels = [];
+      if (missing.includes('name')) missingLabels.push('apna poora naam');
+      if (missing.includes('phone')) missingLabels.push('contact phone number');
+      if (missing.includes('address')) missingLabels.push('mukammal house/street delivery address');
+      if (missing.includes('city')) missingLabels.push('city (shehar)');
+
+      const knownStr = knownParts.length > 0 ? `Aapki details (${knownParts.join(', ')}) note ho gayi hain. ` : '';
+      const prompt = `Ji bilkul! ${knownStr}Order mukammal karne ke liye baraye meharbani ${missingLabels.join(' aur ')} share kar dein.`;
 
       return {
         nextState: CheckoutStep.COLLECTING_ADDRESS,

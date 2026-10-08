@@ -65,7 +65,12 @@ export class IntentResolver {
     t = t.replace(/\b(nhi|nai)\b/gi, 'nahi');
     t = t.replace(/\b(kb)\b/gi, 'kab');
     t = t.replace(/\b(kaha|kha)\b/gi, 'kahan');
-
+    t = t.replace(/\b(bottal|botal|botle)\b/gi, 'bottle');
+    t = t.replace(/\b(safai|safayee)\b/gi, 'cleaning');
+    t = t.replace(/\b(baraf|barf)\b/gi, 'ice');
+    t = t.replace(/\b(nasel)\b/gi, 'nasal');
+    t = t.replace(/\b(dikhaye|dikhao|dekhao|dkhao)\b/gi, 'dikhao');
+    t = t.replace(/\b(bhejo|bhej|send\s*kro|send\s*karo)\b/gi, 'bhejo');
 
     return t;
   }
@@ -131,7 +136,7 @@ export class IntentResolver {
       return { intent: 'CONFIRM_NEGATED', confidence: 0.98 };
     }
     if (isCancelNegated) {
-      if (/\bmt\b/i.test(clean) && !/\b(mat|nahi|nahin|nhi)\b/i.test(clean)) {
+      if (/\b(mt|mat)\s*k[ar]na\b/i.test(text)) {
         return { intent: 'CANCEL', isNegated: true, confidence: 0.98 };
       }
       return { intent: 'CANCEL_NEGATED', confidence: 0.98 };
@@ -198,7 +203,8 @@ export class IntentResolver {
 
     // 10. Explicit Order Cancellation
     if (/\b(cancel\s*(kar|kardo|karein|karna|dein)?|cancle|cancil|cancl|radd)\b/i.test(clean)) {
-      return { intent: 'CANCEL', confidence: 0.96 };
+      const isOrderExplicit = /\b(order|parcel|booking|mera\s*order|order\s*#?\d*)\b/i.test(clean);
+      return { intent: 'CANCEL', isOrderCancel: isOrderExplicit, confidence: 0.96 };
     }
 
     // 11. Ordinal or Contextual Product References (e.g. "iska price?", "iski price?", "iska link", "pehle wale", "doosre wale", "ye wala kitne ka?")
@@ -255,8 +261,8 @@ export class IntentResolver {
     if (
       /\b(please\s*)?(mera\s*)?order\s*(confirm|cnfrm)\s*(k[ar]o|krdo|kardo|dein|kar\s*(?:do|dein))?\b/i.test(clean) ||
       /\b(confirm\s*(?:my\s*)?order|order\s*confirm|booking\s*confirm|cnfrm\s*krdo|confirm\s*kardo|confirm\s*kar\s*(?:do|dein|dijie)|confirm\s*kar\s*dein|haan\s*yehi|haan\s*ye|ji\s*yehi|ye\s*wala\s*confirm)\b/i.test(clean) ||
-      /\b(dispatch\s*kar\s*(?:do|dein)|bhej\s*(?:do|dein))\b/i.test(clean) ||
-      clean === 'confirm kar dein' || clean === 'confirm kar do' || clean === 'confirm' || clean === 'haan' || clean === 'ji'
+      /\b(dispatch\s*(?:kar\s*)?(?:do|dein)|(?:haan\s*)?bhej(?:o)?\s*(?:do|dein))\b/i.test(clean) ||
+      clean === 'confirm kar dein' || clean === 'confirm kar do' || clean === 'confirm' || clean === 'haan' || clean === 'ji' || clean === 'haan bhej do'
     ) {
       return { intent: 'CONFIRM', confidence: 0.94 };
     }

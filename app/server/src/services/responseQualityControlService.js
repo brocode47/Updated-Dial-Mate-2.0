@@ -83,7 +83,10 @@ export class ResponseQualityControlService {
         const rejTitle = (rej.title || rej.name || '').toLowerCase();
         if (rejTitle.length > 3 && replyText.toLowerCase().includes(rejTitle)) {
           // If customer explicitly asked for this product, allow it; otherwise suppress
-          const userAskedExplicitly = userMessage.toLowerCase().includes(rejTitle.split(' ')[0]);
+          const rejWords = rejTitle.split(/\s+/).filter(w => w.length >= 4 && !['wooden', 'silicone', 'pack', 'size'].includes(w));
+          const userAskedExplicitly = rejWords.length > 0
+            ? rejWords.some(w => userMessage.toLowerCase().includes(w))
+            : userMessage.toLowerCase().includes(rejTitle.split(' ')[0]);
           if (!userAskedExplicitly) {
             issues.push(`Promoting recently rejected product: ${rejTitle}`);
             replyText = `Sunday Bazaaar ke deegar products dekhne ke liye hamari website visit karein:\n🔗 https://${storeDomain}/collections/all-products`;
@@ -94,23 +97,33 @@ export class ResponseQualityControlService {
       }
     }
 
-    // 4. FINANCIAL CALCULATION VALIDATION
-    if (activeProduct && activeProduct.numericPrice) {
+    // 4. FINANCIAL CALCULATION VALIDATION (Only for product replies, never order totals)
+    if (!isOrderQuery && !replyText.includes('order #') && activeProduct && activeProduct.numericPrice) {
       const price = Number(activeProduct.numericPrice);
       const fee = Number(activeProduct.deliveryCharge || 199);
       const expectedTotal = price + fee;
 
       // If text mentions both price and total, ensure total is accurate
-      const totalMatch = replyText.match(/total\s*(?:Rs\.?|COD)?\s*(\d+)/i);
-      if (totalMatch && Number(totalMatch[1]) !== expectedTotal && Number(totalMatch[1]) !== price) {
-        issues.push(`Calculated total ${totalMatch[1]} does not match price (${price}) + delivery (${fee}) = ${expectedTotal}`);
-        replyText = replyText.replace(totalMatch[0], `total Rs. ${expectedTotal}`);
-        repaired = true;
+      const totalMatch = replyText.match(/total\s*(?:Rs\.?|COD)?\s*([\d,]+)/i);
+      if (totalMatch) {
+        const parsedTotal = Number(totalMatch[1].replace(/,/g, ''));
+        if (parsedTotal !== expectedTotal && parsedTotal !== price) {
+          issues.push(`Calculated total ${parsedTotal} does not match price (${price}) + delivery (${fee}) = ${expectedTotal}`);
+          replyText = replyText.replace(totalMatch[0], `total Rs. ${expectedTotal}`);
+          repaired = true;
+        }
       }
     }
 
     // 5. DUPLICATE FACT & SENTENCE CLEANING
     replyText = this.deduplicateSentences(replyText);
+
+    // 5b. WEBPAGE DUMP SANITIZATION: Strip raw HTML tags
+    if (/<[a-z][\s\S]*>/i.test(replyText)) {
+      issues.push('Raw HTML markup detected in response');
+      replyText = replyText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      repaired = true;
+    }
 
     // 6. SPOKEN VOICE QUALITY: Zero URLs in spoken text
     if (isVoiceInbound || spokenText) {

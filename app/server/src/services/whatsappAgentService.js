@@ -409,37 +409,77 @@ export class WhatsAppAgentService {
         await ConversationStateService.setPendingAction(conversationKey, 'AWAITING_ORDER_NUMBER');
       } else {
         toolResults.push(`No matching orders found`);
-        const detailParts = [];
-        if (extracted.name) detailParts.push(`naam: ${extracted.name}`);
-        if (extracted.city) detailParts.push(`shehar: ${extracted.city}`);
-        const detailsStr = detailParts.length > 0 ? ` (${detailParts.join(', ')})` : '';
-        replyText = `Maazrat, aapki details${detailsStr} se koi matching order record mein nahi mila. Baraye meharbani apna order number share karein ya phone number check kar lein.`;
+        if (!extracted.name && !extracted.city) {
+          replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
+        } else {
+          const detailParts = [];
+          if (extracted.name) detailParts.push(`naam: ${extracted.name}`);
+          if (extracted.city) detailParts.push(`shehar: ${extracted.city}`);
+          const detailsStr = detailParts.length > 0 ? ` (${detailParts.join(', ')})` : '';
+          replyText = `Maazrat, aapki details${detailsStr} se koi matching order record mein nahi mila. Baraye meharbani apna order number share karein ya phone number check kar lein.`;
+        }
         await ConversationStateService.setPendingAction(conversationKey, 'AWAITING_ORDER_NUMBER');
       }
     }
 
     // CASE C: Order Cancellation or Product Dismissal
     else if (detected.intent === 'CANCEL') {
-      const targetOrder = activeOrder || recentOrder;
-      if (targetOrder && (state?.recentTopic === 'order' || state?.activeOrderNumber || !activeProduct)) {
-        if (IntentResolver.isNegated(messageText, 'cancel')) {
-          replyText = `Ji, aapka order cancel nahi kiya gaya hai aur confirmed hi rahe ga.`;
-        } else {
-          if (targetOrder.orderId) {
-            await ToolDispatcher.dispatch('cancel_order', {
-              orderId: targetOrder.orderId,
-              reason: 'customer_whatsapp_cancellation'
-            }, {
-              shopDomain: shop.domain,
-              orderId: targetOrder.orderId
+      if (detected.isNegated || IntentResolver.isNegated(messageText, 'cancel')) {
+        executedAction = 'cancel_negated_suppressed';
+        replyText = 'Theek hai, aapka order cancel nahi kiya gaya. Yeh safe hai aur confirmed hi rahe ga.';
+      } else {
+        const cleanMsg = String(messageText || '').toLowerCase().trim();
+        const hasActiveOrder = Boolean(state?.activeOrderNumber || state?.activeOrderId || activeOrder || state?.recentTopic === 'order');
+        const mentionsProduct = /\b(product|item|cover|belt|shoes|kursi|chair|snoring|dilator|brush|bottle)\b/i.test(cleanMsg);
+
+        const isProductDismissal = !hasActiveOrder && (
+          /\b(nahi\s*(?:chahiye|chaiye|chahye|lena|leni|manzoor)|rehne\s*do|reh\s*ne\s*do|choro|chhod\s*do|skip)\b/i.test(cleanMsg) ||
+          ['nahi', 'nahin', 'no', 'skip'].includes(cleanMsg)
+        );
+
+        const isExplicitOrderCancel = (hasActiveOrder && !mentionsProduct) || Boolean(
+          detected.isOrderCancel ||
+          cleanMsg === '2' ||
+          cleanMsg === 'cancel' ||
+          /\b(order|parcel|booking|mera\s*order|order\s*#?\d*)\b/i.test(cleanMsg)
+        );
+
+        if (isExplicitOrderCancel) {
+        let targetOrder = activeOrder || (cleanMsg === '2' ? recentOrder : null);
+        if (!targetOrder && orders.length === 1) {
+          targetOrder = orders[0];
+        } else if (!targetOrder && orders.length > 1) {
+          const list = orders.slice(0, 3).map(o => {
+            const cleanItem = ProductSummaryService.normalizeProductName(o.items || 'item').customerFriendlyName;
+            return `#${o.orderNumber} — ${cleanItem}`;
+          }).join('\n');
+          replyText = `Aapke aik se zyada orders record mein hain:\n\n${list}\n\nAap kis order ko cancel karna chahtay hain? Order number bata dein.`;
+          await ConversationStateService.setPendingAction(conversationKey, 'AWAITING_ORDER_NUMBER');
+        } else if (!targetOrder && orders.length === 0) {
+          replyText = `Maazrat, record mein aapka koi active order nahi mila jise cancel kiya ja sakay. Baraye meharbani apna order number share karein.`;
+        }
+
+        if (targetOrder) {
+          if (IntentResolver.isNegated(messageText, 'cancel')) {
+            replyText = `Ji, aapka order cancel nahi kiya gaya hai aur confirmed hi rahe ga.`;
+          } else {
+            const oId = targetOrder.orderId || targetOrder.id;
+            if (oId) {
+              await ToolDispatcher.dispatch('cancel_order', {
+                orderId: oId,
+                reason: 'customer_whatsapp_cancellation'
+              }, {
+                shopDomain: shop.domain,
+                orderId: oId
+              });
+            }
+            executedAction = 'cancel_order';
+            await ConversationStateService.updateState(conversationKey, {
+              activeOrderStatus: 'Cancelled',
+              recentTopic: 'order'
             });
+            replyText = `Aapka order #${targetOrder.orderNumber} cancel kar diya gaya hai. Agar aapko koi aur cheez dekhni ho to zaroor batayein.`;
           }
-          executedAction = 'cancel_order';
-          await ConversationStateService.updateState(conversationKey, {
-            activeOrderStatus: 'Cancelled',
-            recentTopic: 'order'
-          });
-          replyText = `Aapka order #${targetOrder.orderNumber} cancel kar diya gaya hai. Agar aapko koi aur cheez dekhni ho to zaroor batayein.`;
         }
       } else {
         executedAction = 'product_rejected';
@@ -447,6 +487,7 @@ export class WhatsAppAgentService {
         replyText = `Theek hai, koi baat nahi! Agar aap kuch aur dekhna chahein to product ka naam ya category bata dein, main madad kar deti hoon.`;
       }
     }
+  }
 
     // CASE D: Product Rejection
     else if (detected.intent === 'PRODUCT_REJECTION') {
@@ -469,8 +510,14 @@ export class WhatsAppAgentService {
 
     // CASE E: Confirmation Flow (Existing Order vs New Product Purchase)
     else if (detected.intent === 'CONFIRM') {
-      const targetOrder = activeOrder || (state?.recentTopic === 'order' ? recentOrder : null);
-      if (targetOrder && targetOrder.orderNumber && (state?.recentTopic === 'order' || state?.activeOrderNumber || !activeProduct)) {
+      const cleanMsg = String(messageText || '').toLowerCase().trim();
+      const isDirectConfirmCode = cleanMsg === '1' || cleanMsg === 'confirm';
+      const isExplicitOrderConfirm = Boolean(
+        isDirectConfirmCode ||
+        (/\b(mera\s*order|order\s*#?\d*)\b/i.test(messageText) && (state?.recentTopic === 'order' || state?.activeOrderNumber || activeOrder))
+      );
+      const targetOrder = activeOrder || (isDirectConfirmCode || state?.recentTopic === 'order' || !activeProduct ? recentOrder : null);
+      if (targetOrder && targetOrder.orderNumber && (state?.recentTopic === 'order' || state?.activeOrderNumber || isExplicitOrderConfirm || !activeProduct)) {
         routingDecision.orderLookup = true;
         responseSource = 'order_confirmation';
         if (IntentResolver.isNegated(messageText, 'confirm')) {
@@ -478,11 +525,12 @@ export class WhatsAppAgentService {
         } else if (targetOrder.status === 'Confirmed') {
           replyText = `Aapka order #${targetOrder.orderNumber} pehle hi confirm ho chuka hai aur dispatch ke liye tayyar hai!`;
         } else {
-          if (targetOrder.orderId) {
-            toolsCalled.push(`confirm_order(${targetOrder.orderId})`);
-            await ToolDispatcher.dispatch('confirm_order', { orderId: targetOrder.orderId }, {
+          const oId = targetOrder.orderId || targetOrder.id;
+          if (oId) {
+            toolsCalled.push(`confirm_order(${oId})`);
+            await ToolDispatcher.dispatch('confirm_order', { orderId: oId }, {
               shopDomain: shop.domain,
-              orderId: targetOrder.orderId
+              orderId: oId
             });
             toolResults.push(`Confirmed order #${targetOrder.orderNumber}`);
           }
@@ -500,29 +548,55 @@ export class WhatsAppAgentService {
         responseSource = 'checkout_engine';
         toolsCalled.push('CheckoutStateMachine.processTurn');
         const prod = activeProduct || candidateProduct;
+
+        const isCheckoutInProgress = state.recentTopic === 'checkout' ||
+          state.pendingAction === 'AWAITING_ADDRESS' ||
+          state.pendingAction === 'COLLECTING_ADDRESS' ||
+          state.pendingAction === 'AWAITING_FINAL_CONFIRMATION';
+
         const checkoutResult = CheckoutStateMachine.processTurn(
           state.checkoutState || {},
           messageText,
           { activeProduct: prod, customer, senderPhone: cleanPhone }
         );
 
-        const names = ProductSummaryService.normalizeProductName(prod.title);
-        const quote = await DeliveryService.getDeliveryQuote({ shopDomain: shop.domain, subtotal: prod.numericPrice });
-        const calc = DeliveryService.calculateTotal(prod.numericPrice, quote.deliveryCharge);
-        toolResults.push(`Initiated booking for ${prod.title}`);
+        if (state.pendingAction === 'AWAITING_FINAL_CONFIRMATION') {
+          executedAction = 'order_booking_confirmed';
+          await ConversationStateService.updateState(conversationKey, {
+            pendingAction: null,
+            recentTopic: 'checkout_completed'
+          });
+          const cs = checkoutResult.checkout || state.checkoutState || {};
+          const names = ProductSummaryService.normalizeProductName(prod.title);
+          replyText = `Bohat shukriya ${cs.customerName || ''}! Aapka order *${names.customerFriendlyName}* (Total COD Rs. ${cs.total || prod.numericPrice}) confirm kar diya gaya hai. Mukammal pata: ${cs.address || ''}, ${cs.city || ''}. Hamari team jald dispatch kar degi!`;
+        } else if (isCheckoutInProgress) {
+          await ConversationStateService.updateState(conversationKey, {
+            activeProduct: prod,
+            currentProduct: prod,
+            checkoutState: checkoutResult.checkout,
+            pendingAction: 'COLLECTING_ADDRESS',
+            recentTopic: 'checkout'
+          });
+          replyText = `Ji bilkul! Baraye meharbani apna poora naam, phone number, complete delivery address aur shehar share kar dein taake order book kiya ja sakay.`;
+        } else {
+          const names = ProductSummaryService.normalizeProductName(prod.title);
+          const quote = await DeliveryService.getDeliveryQuote({ shopDomain: shop.domain, subtotal: prod.numericPrice });
+          const calc = DeliveryService.calculateTotal(prod.numericPrice, quote.deliveryCharge);
+          toolResults.push(`Initiated booking for ${prod.title}`);
 
-        await ConversationStateService.updateState(conversationKey, {
-          checkoutState: checkoutResult.checkout,
-          currentProduct: prod,
-          activeProduct: prod,
-          activeProductPrice: prod.numericPrice,
-          activeDeliveryCharge: quote.deliveryCharge,
-          activeProductTotal: calc.total,
-          pendingAction: 'AWAITING_ADDRESS',
-          recentTopic: 'checkout'
-        });
+          await ConversationStateService.updateState(conversationKey, {
+            checkoutState: checkoutResult.checkout,
+            currentProduct: prod,
+            activeProduct: prod,
+            activeProductPrice: prod.numericPrice,
+            activeDeliveryCharge: quote.deliveryCharge,
+            activeProductTotal: calc.total,
+            pendingAction: 'AWAITING_ADDRESS',
+            recentTopic: 'checkout'
+          });
 
-        replyText = `Ji, aap naya order book karna chahte hain *${names.customerFriendlyName}* (Rs. ${prod.numericPrice} + Rs. ${quote.deliveryCharge} delivery, kul total Rs. ${calc.total}, quantity 1) ka? Naya order book karne ke liye baraye meharbani apna poora naam, phone number, complete delivery address aur city share kar dein.`;
+          replyText = `Ji, aap naya order book karna chahte hain *${names.customerFriendlyName}* (Rs. ${prod.numericPrice} + Rs. ${quote.deliveryCharge} delivery, kul total Rs. ${calc.total}, quantity 1) ka? Naya order book karne ke liye baraye meharbani apna poora naam, phone number, complete delivery address aur city share kar dein.`;
+        }
       } else {
         replyText = `Mujhe aapka koi pending order ya product nahi mila confirm karne ke liye. Agar aapke paas order number hai to zaroor batayein.`;
       }
@@ -533,7 +607,8 @@ export class WhatsAppAgentService {
       (state.recentTopic === 'checkout' ||
        state.pendingAction === 'COLLECTING_ADDRESS' ||
        state.pendingAction === 'AWAITING_ADDRESS' ||
-       state.pendingAction === 'COLLECTING_CHECKOUT_DETAILS') &&
+       state.pendingAction === 'COLLECTING_CHECKOUT_DETAILS' ||
+       state.pendingAction === 'AWAITING_FINAL_CONFIRMATION') &&
       ![
         'COLLECTION',
         'CATALOG',
@@ -550,12 +625,19 @@ export class WhatsAppAgentService {
         'SOCIAL_CASUAL',
         'PRODUCT_INQUIRY',
         'PRODUCT_DETAIL',
+        'PRODUCT_LINK',
+        'ORDINAL_REFERENCE',
+        'DELIVERY_INQUIRY',
+        'ORDER_DELIVERY_CHARGES',
+        'ORDER_TOTAL',
+        'TOTAL_INQUIRY',
         'ORDER_STATUS',
         'ORDER_SUMMARY',
         'ORDER_LOOKUP_BY_DETAILS'
       ].includes(detected.intent)
     ) {
-      if (activeProduct) {
+      if (activeProduct || candidateProduct) {
+        const prod = activeProduct || candidateProduct;
         executedAction = 'checkout_details_update';
         routingDecision.checkout = true;
         responseSource = 'checkout_engine';
@@ -563,13 +645,20 @@ export class WhatsAppAgentService {
         const checkoutResult = CheckoutStateMachine.processTurn(
           state.checkoutState || {},
           messageText,
-          { activeProduct, customer, senderPhone: cleanPhone }
+          { activeProduct: prod, customer, senderPhone: cleanPhone }
         );
         toolResults.push(`Checkout state updated: ready=${checkoutResult.isReadyForConfirmation}`);
 
         await ConversationStateService.updateState(conversationKey, {
+          activeProduct: prod,
+          currentProduct: prod,
           checkoutState: checkoutResult.checkout,
-          pendingAction: checkoutResult.isReadyForConfirmation ? 'AWAITING_FINAL_CONFIRMATION' : 'COLLECTING_ADDRESS'
+          customerName: checkoutResult.checkout.customerName || state.customerName,
+          customerPhone: checkoutResult.checkout.customerPhone || state.customerPhone,
+          customerCity: checkoutResult.checkout.city || state.customerCity,
+          customerAddress: checkoutResult.checkout.address || state.customerAddress,
+          pendingAction: checkoutResult.isReadyForConfirmation ? 'AWAITING_FINAL_CONFIRMATION' : 'COLLECTING_ADDRESS',
+          recentTopic: 'checkout'
         });
 
         replyText = checkoutResult.prompt;
@@ -690,6 +779,16 @@ export class WhatsAppAgentService {
     else if (detected.intent === 'PRODUCT_DETAIL' || detected.intent === 'ORDINAL_REFERENCE') {
       responseSource = 'product_detail';
       let prod = ref.entity || activeProduct || candidateProduct;
+      if (prod && (!prod.numericPrice || !prod.url)) {
+        const cleanQuery = ProductSummaryService.normalizeProductName(prod.title || '').customerFriendlyName || prod.title;
+        if (cleanQuery) {
+          const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
+          if (searchRes?.products?.[0]) {
+            prod = searchRes.products[0];
+            await ConversationStateService.setActiveProduct(conversationKey, prod);
+          }
+        }
+      }
       if (!prod) {
         const cleanQuery = messageText
           .replace(/\b(ki\s*price|ka\s*rate|kitne\s*ka\s*hai|kitn[ey]\s*ka|price|rate|details|detail|batao|btao|bata\s*dein|hai|kya|mujhe|chahiye)\b/gi, '')
@@ -773,9 +872,9 @@ export class WhatsAppAgentService {
       replyText = `Mera naam Zara hai aur main Sunday Bazaaar ki official customer support representative hoon. Main aapki orders, delivery aur product details mein madad ke liye hazir hoon!`;
     } else if (detected.intent === 'HUMAN_TRANSFER') {
       const isAlreadyEscalated = Boolean(
-        state.humanEscalation?.notificationSent ||
-        state.escalationState?.notificationSent ||
-        conversation.isEscalated
+        conversation.isEscalated ||
+        ((state.escalationState?.conversationId === conversation.id || state.humanEscalation?.conversationId === conversation.id) &&
+         (state.escalationState?.notificationSent || state.humanEscalation?.notificationSent))
       );
 
       if (isAlreadyEscalated) {
@@ -795,12 +894,17 @@ export class WhatsAppAgentService {
           shopDomain: shop.domain,
           reason: 'Customer explicitly requested to speak with owner / live human agent',
           customerPhone: cleanPhone,
-          customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : null,
+          customerName: customer ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() : (state.customerName || null),
+          customerCity: customer?.city || state.customerCity || null,
+          activeProduct: activeProduct ? (activeProduct.title || activeProduct.name) : null,
+          activeOrder: activeOrder ? activeOrder.orderNumber : null,
+          conversationSummary: `Customer (${cleanPhone}) requested human agent. Active product: ${activeProduct?.title || 'None'}, Order: ${activeOrder?.orderNumber || 'None'}. Last message: "${messageText}"`,
           conversationId: conversation.id
         }).catch(() => ({ escalated: true, alreadyEscalated: false }));
 
         await ConversationStateService.markHumanEscalation(conversationKey, {
           notificationSent: true,
+          conversationId: conversation.id,
           notifiedAt: Date.now()
         });
 

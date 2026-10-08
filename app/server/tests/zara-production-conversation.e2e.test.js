@@ -606,4 +606,141 @@ describe('ZARA PRODUCTION FORENSIC VERIFICATION — End-to-End Conversation Test
     expect(turn3.success).toBe(true);
     expect(turn3.replyText).toContain('products/wooden-silicone-chair-protection-cover');
   });
+
+  // =========================================================================
+  // MANDATORY 9-TURN VOICE/TEXT CONTEXT CONTINUITY TEST
+  // =========================================================================
+  it('MANDATORY 9-TURN VOICE/TEXT CONTEXT CONTINUITY: Every single turn retains Wooden Silicone Chair Protection Cover', async () => {
+    const PHONE_9TURN = '923001234567';
+    const SENDER_9TURN = `${PHONE_9TURN}@s.whatsapp.net`;
+    const SESS_9TURN = 'sess-9turn-context';
+    const stateKey = `${SHOP_ID}:+${PHONE_9TURN}`;
+
+    // TURN 1: TEXT: "chair protection cover dikhao"
+    const t1 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'chair protection cover dikhao',
+      isVoiceInbound: false
+    });
+    expect(t1.success).toBe(true);
+    expect(t1.replyText).toContain('Chair Protection Cover');
+    const s1 = await ConversationStateService.getState(stateKey);
+    expect(s1.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 2: VOICE: "iski price kya hai"
+    const t2 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'iski price kya hai',
+      isVoiceInbound: true
+    });
+    expect(t2.success).toBe(true);
+    expect(t2.isVoiceResponse).toBe(true);
+    expect(t2.spokenText).toContain('499');
+    const s2 = await ConversationStateService.getState(stateKey);
+    expect(s2.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 3: VOICE: "iska total?"
+    const t3 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'iska total?',
+      isVoiceInbound: true
+    });
+    expect(t3.success).toBe(true);
+    expect(t3.isVoiceResponse).toBe(true);
+    expect(t3.spokenText).toContain('698');
+    const s3 = await ConversationStateService.getState(stateKey);
+    expect(s3.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 4: TEXT: "iska link bhejo"
+    const t4 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'iska link bhejo',
+      isVoiceInbound: false
+    });
+    expect(t4.success).toBe(true);
+    expect(t4.replyText).toContain('products/wooden-silicone-chair-protection-cover');
+    const s4 = await ConversationStateService.getState(stateKey);
+    expect(s4.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 5: VOICE: "mera order confirm krdo"
+    const t5 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'mera order confirm krdo',
+      isVoiceInbound: true
+    });
+    expect(t5.success).toBe(true);
+    expect(t5.isVoiceResponse).toBe(true);
+    expect(t5.spokenText).toMatch(/Chair Protection Cover/i);
+    const s5 = await ConversationStateService.getState(stateKey);
+    expect(s5.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 6: TEXT: "haan"
+    const t6 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'haan',
+      isVoiceInbound: false
+    });
+    expect(t6.success).toBe(true);
+    expect(t6.replyText).toMatch(/naam|address|shehar|phone/i);
+    const s6 = await ConversationStateService.getState(stateKey);
+    expect(s6.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 7: VOICE: "address Lahore hai"
+    const t7 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'address Lahore hai',
+      isVoiceInbound: true
+    });
+    expect(t7.success).toBe(true);
+    const s7 = await ConversationStateService.getState(stateKey);
+    expect(s7.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 8: TEXT: "naam Ali hai"
+    const t8 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'naam Ali hai',
+      isVoiceInbound: false
+    });
+    expect(t8.success).toBe(true);
+    const s8 = await ConversationStateService.getState(stateKey);
+    expect(s8.activeProduct.title).toContain('Chair Protection Cover');
+
+    // TURN 9: VOICE: "mera number ye hai 03331234567"
+    const t9 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: SESS_9TURN,
+      fromPhone: SENDER_9TURN,
+      messageText: 'mera number ye hai 03331234567',
+      isVoiceInbound: true
+    });
+    expect(t9.success).toBe(true);
+    const s9 = await ConversationStateService.getState(stateKey);
+    expect(s9.activeProduct.title).toContain('Chair Protection Cover');
+  });
 });
+

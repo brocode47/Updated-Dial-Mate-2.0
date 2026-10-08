@@ -26,6 +26,14 @@ export class ConversationStateService {
   static registerAlias(sourceKey, targetKey) {
     if (sourceKey && targetKey && sourceKey !== targetKey) {
       aliasMap.set(sourceKey, targetKey);
+      // If sourceKey already had state stored before alias was registered, merge into targetKey
+      const sourceState = memoryStore.get(sourceKey);
+      const targetState = memoryStore.get(targetKey);
+      if (sourceState && !targetState) {
+        memoryStore.set(targetKey, sourceState);
+      } else if (sourceState && targetState) {
+        memoryStore.set(targetKey, { ...targetState, ...sourceState });
+      }
     }
   }
 
@@ -99,10 +107,36 @@ export class ConversationStateService {
     const activeProdId = currentProd ? (currentProd.id || null) : (partialState.activeProductId ?? current.activeProductId ?? null);
     const activeProdUrl = currentProd ? (currentProd.url || null) : (partialState.activeProductUrl ?? current.activeProductUrl ?? null);
     const activeProdPrice = currentProd ? (currentProd.formattedPrice || currentProd.price || null) : (partialState.activeProductPrice ?? current.activeProductPrice ?? null);
+    const activeProdVariant = partialState.activeProductVariant ?? currentProd?.variant ?? currentProd?.selectedVariant ?? current.activeProductVariant ?? null;
 
     const activeOrdId = currentOrd ? (currentOrd.orderId || currentOrd.id || null) : (partialState.activeOrderId ?? current.activeOrderId ?? null);
     const activeOrdNumber = currentOrd ? (currentOrd.orderNumber || null) : (partialState.activeOrderNumber ?? current.activeOrderNumber ?? null);
     const activeOrdStatus = currentOrd ? (currentOrd.status || null) : (partialState.activeOrderStatus ?? current.activeOrderStatus ?? null);
+
+    // Customer Identity & Fields
+    const activeCust = partialState.activeCustomer !== undefined ? partialState.activeCustomer : (current.activeCustomer || null);
+    const custName = partialState.customerName ?? activeCust?.name ?? activeCust?.firstName ?? current.customerName ?? null;
+    const custPhone = partialState.customerPhone ?? activeCust?.phone ?? current.customerPhone ?? null;
+    const custCity = partialState.customerCity ?? activeCust?.city ?? current.customerCity ?? null;
+    const custAddress = partialState.customerAddress ?? activeCust?.address ?? current.customerAddress ?? null;
+
+    // Escalation state
+    const escalation = partialState.escalationState || current.escalationState || current.humanEscalation || null;
+    const humanEscActive = partialState.humanEscalationActive !== undefined
+      ? Boolean(partialState.humanEscalationActive)
+      : (partialState.escalationState?.requested ?? current.humanEscalationActive ?? Boolean(escalation?.requested));
+
+    // Interaction & Entities
+    const lastInt = partialState.lastIntent || partialState.activeIntent || current.lastIntent || current.activeIntent || null;
+    const lastUserInt = partialState.lastUserIntent || (partialState.activeIntent ? partialState.activeIntent : current.lastUserIntent) || null;
+    const lastAsstAction = partialState.lastAssistantAction || partialState.action || current.lastAssistantAction || null;
+    const lastExpEntity = partialState.lastExplicitEntity !== undefined ? partialState.lastExplicitEntity : (current.lastExplicitEntity || null);
+    const lastMentEntity = partialState.lastMentionedEntity !== undefined ? partialState.lastMentionedEntity : (current.lastMentionedEntity || (currentProd ? { type: 'PRODUCT', id: activeProdId, title: currentProd?.title } : null));
+
+    // Stages
+    const convStage = partialState.conversationStage || current.conversationStage || (currentOrd ? 'ORDER_SERVICING' : (currentProd ? 'PRODUCT_DISCOVERY' : 'GREETING'));
+    const chkStage = partialState.checkoutStage !== undefined ? partialState.checkoutStage : (partialState.checkoutState?.step || current.checkoutStage || null);
+    const pendClarification = partialState.pendingClarification !== undefined ? partialState.pendingClarification : (current.pendingClarification || null);
 
     const updated = {
       ...current,
@@ -111,6 +145,7 @@ export class ConversationStateService {
       activeProduct: currentProd,
       currentProduct: currentProd,
       lastReferencedProduct: lastRefProd,
+      activeProductVariant: activeProdVariant,
       activeProductId: activeProdId,
       activeProductUrl: activeProdUrl,
       activeProductPrice: activeProdPrice,
@@ -124,17 +159,34 @@ export class ConversationStateService {
       activeOrderNumber: activeOrdNumber,
       activeOrderStatus: activeOrdStatus,
 
+      // Customer identity
+      activeCustomer: activeCust,
+      customerName: custName,
+      customerPhone: custPhone,
+      customerCity: custCity,
+      customerAddress: custAddress,
+
       // Interaction tracking
-      activeIntent: partialState.activeIntent || current.activeIntent || null,
+      activeIntent: lastInt,
+      lastIntent: lastInt,
+      lastUserIntent: lastUserInt,
+      lastAssistantAction: lastAsstAction,
+      lastExplicitEntity: lastExpEntity,
+      lastMentionedEntity: lastMentEntity,
       lastCustomerMessage: partialState.lastCustomerMessage || current.lastCustomerMessage || null,
       lastAssistantMessage: partialState.lastAssistantMessage || current.lastAssistantMessage || null,
       lastAssistantIntent: partialState.lastAssistantIntent || current.lastAssistantIntent || null,
       pendingAction: partialState.pendingAction !== undefined ? partialState.pendingAction : (current.pendingAction || null),
 
-      // Lifecycles
+      // Lifecycles & Stages
       rejectedProducts: partialState.rejectedProducts || current.rejectedProducts || [],
+      rejectedCategories: partialState.rejectedCategories || current.rejectedCategories || [],
+      conversationStage: convStage,
+      humanEscalationActive: humanEscActive,
+      checkoutStage: chkStage,
+      pendingClarification: pendClarification,
       recentTurns: partialState.recentTurns || current.recentTurns || [],
-      escalationState: partialState.escalationState || current.escalationState || current.humanEscalation || null,
+      escalationState: escalation,
       isClosed: partialState.isClosed !== undefined ? partialState.isClosed : (current.isClosed || false),
 
       lastActivityTimestamp: partialState.lastActivityTimestamp || Date.now(),
@@ -384,7 +436,7 @@ export class ConversationStateService {
     const target = product || state.activeProduct || state.currentProduct || state.lastReferencedProduct || null;
     const rejected = state.rejectedProducts || [];
     if (target && !this.isRejected(state, target)) {
-      rejected.push({ id: target.id, title: target.title, rejectedAt: Date.now() });
+      rejected.push({ ...target, rejectedAt: Date.now() });
     }
     await this.clearActiveProduct(conversationId, {
       rejectedProducts: rejected,
@@ -454,12 +506,14 @@ export class ConversationStateService {
     const escalation = {
       requested: true,
       notificationSent: details.notificationSent !== false,
-      notifiedAt: Date.now(),
+      notifiedAt: details.notifiedAt || Date.now(),
+      conversationId: details.conversationId || conversationId,
       ...details
     };
     await this.updateState(conversationId, {
       escalationState: escalation,
-      humanEscalation: escalation
+      humanEscalation: escalation,
+      humanEscalationActive: true
     });
   }
 
@@ -524,6 +578,20 @@ export class ConversationStateService {
           await this.unrejectProduct(conversationId, p);
           await this.setActiveProduct(conversationId, p);
           return p;
+        }
+      }
+    }
+
+    // 4. Name fragment matching within previously rejected products (re-activates on explicit recall like "wo 19L wala dobara dikhao")
+    if (state.rejectedProducts && state.rejectedProducts.length > 0) {
+      for (const rej of state.rejectedProducts) {
+        const words = (rej.title || '').toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+        if (words.some(w => clean.includes(w)) || (clean.includes('dobara') || clean.includes('phir se') || clean.includes('again'))) {
+          if (words.some(w => clean.includes(w))) {
+            await this.unrejectProduct(conversationId, rej);
+            await this.setActiveProduct(conversationId, rej);
+            return rej;
+          }
         }
       }
     }

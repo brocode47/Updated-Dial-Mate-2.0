@@ -39,22 +39,28 @@ export class HumanEscalationService {
     productContext = null,
     orderNumber = null,
     conversationRef = 'Active WhatsApp Chat',
-    reason = 'Customer requested human support'
+    reason = 'Customer requested human support',
+    conversationSummary = null
   }) {
     let msg = `🔔 *Human Support Request*\n` +
       `🚨 *CUSTOMER WANTS HUMAN SUPPORT*\n\n` +
       `*Customer name:* ${customerName}\n` +
       `*Customer phone:* ${customerPhone}\n` +
+      `*Customer city:* ${customerCity}\n` +
       `*Current conversation:* ${conversationRef}\n` +
       `*Reason:* ${reason}\n` +
       `*Latest customer message:* "${customerRequest}"\n\n`;
 
     if (productContext) {
-      msg += `*Context:* ${productContext}\n\n`;
+      msg += `*Context / Product:* ${productContext}\n\n`;
     }
 
     if (orderNumber) {
       msg += `*Order:* #${orderNumber}\n\n`;
+    }
+
+    if (conversationSummary) {
+      msg += `*Recent Summary:* ${conversationSummary}\n\n`;
     }
 
     msg += `Please follow up with the customer directly.`;
@@ -142,9 +148,11 @@ export class HumanEscalationService {
    * @param {Object} [params.context={}] - Context containing customer, product, and conversation info
    * @returns {Promise<{ success: boolean, status: string, liveTransfer: boolean, notificationSent: boolean, duplicatePrevented: boolean, message: string, escalationId: string }>}
    */
-  static async escalate({ shopDomain, shopId = null, orderId = null, reason = 'human_requested', context = {} }) {
+  static async escalate({ shopDomain, shopId = null, orderId = null, reason = 'human_requested', context = {}, ...rest }) {
     const escalationId = `esc_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     console.log(`🚨 [HumanEscalation] Escalation triggered (${escalationId}) for ${shopDomain || shopId} (Reason: ${reason})`);
+
+    const mergedContext = { ...rest, ...context };
 
     try {
       // 1. Resolve Shop
@@ -159,9 +167,10 @@ export class HumanEscalationService {
       // 2. Resolve Order if provided
       let order = null;
       let orderPayload = {};
-      if (orderId) {
+      if (orderId || mergedContext.orderId) {
+        const targetOrdId = orderId || mergedContext.orderId;
         order = await prisma.order.findUnique({
-          where: { id: String(orderId) },
+          where: { id: String(targetOrdId) },
           include: { shop: true, customer: true }
         });
         if (order) {
@@ -197,14 +206,14 @@ export class HumanEscalationService {
 
       // 3. Resolve Customer Identity
       const customerName =
-        context.customerName ||
+        mergedContext.customerName ||
         (order?.customer ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() : null) ||
         orderPayload.shipping_address?.name ||
         orderPayload.customer?.first_name ||
         'Customer';
 
       const customerPhone =
-        context.customerPhone ||
+        mergedContext.customerPhone ||
         order?.customer?.phone ||
         orderPayload.shipping_address?.phone ||
         orderPayload.customer?.phone ||
@@ -212,33 +221,38 @@ export class HumanEscalationService {
         'On file';
 
       const customerCity =
-        context.customerCity ||
+        mergedContext.customerCity ||
         orderPayload.shipping_address?.city ||
         order?.customer?.city ||
         'On file';
 
       const orderNumber =
-        context.orderNumber ||
+        mergedContext.orderNumber ||
         order?.orderNumber ||
         (orderPayload.order_number ? `${orderPayload.order_number}` : null);
 
       const productContext =
-        context.productContext ||
-        context.productTitle ||
-        context.activeProduct?.title ||
-        context.productName ||
+        mergedContext.productContext ||
+        mergedContext.productTitle ||
+        mergedContext.activeProduct?.title ||
+        mergedContext.productName ||
         null;
 
       const conversationRef =
-        context.conversationId ||
-        context.callId ||
+        mergedContext.conversationId ||
+        mergedContext.callId ||
         `Chat with ${customerPhone}`;
 
-      const customerRequest = context.customerMessage ||
+      const conversationSummary =
+        mergedContext.conversationSummary ||
+        mergedContext.summary ||
+        null;
+
+      const customerRequest = mergedContext.customerMessage ||
         (reason === 'dispute' ? 'Customer disputed order details.' : 'Customer wants to speak with a real person.');
 
       // 4. Deduplication Check
-      const dedupeKey = `${shop.id}:${context.conversationId || customerPhone}`;
+      const dedupeKey = `${shop.id}:${mergedContext.conversationId || customerPhone}`;
       const isDupe = await this.isDuplicate(dedupeKey);
 
       if (isDupe) {
@@ -262,7 +276,9 @@ export class HumanEscalationService {
         customerRequest,
         productContext,
         orderNumber,
-        conversationRef
+        conversationRef,
+        reason,
+        conversationSummary
       });
 
       // 6. Dispatch WhatsApp notification to store owner/operator
