@@ -65,8 +65,12 @@ export class CheckoutStateMachine {
     const addrIndicators = /(?:address|adrs|pata)\s*(?:hai|hy|he|is|:)?\s*([^,.\n]+)/i;
     const addrMatch = raw.match(addrIndicators);
     if (addrMatch && addrMatch[1]) {
-      const candidateAddr = addrMatch[1].trim();
-      if (candidateAddr.length > 5 && !/^(karachi|lahore|islamabad)$/i.test(candidateAddr)) {
+      let candidateAddr = addrMatch[1].trim();
+      // Strip any operational instructions or directory search phrases
+      candidateAddr = candidateAddr.replace(/\s*(?:apne|apni)?\s*(?:directory|check\s*karo|status|batao|btao|details?|record|mein|main|se|jo\s*order).*$/i, '').trim();
+      candidateAddr = candidateAddr.replace(/\s+(?:hai|hy|he|h)$/i, '').trim();
+      const isJustCity = PAKISTAN_CITIES.some(c => candidateAddr.toLowerCase() === c);
+      if (candidateAddr.length > 5 && !isJustCity) {
         extracted.address = candidateAddr;
       }
     } else {

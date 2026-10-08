@@ -1,4 +1,4 @@
-﻿import { ProductSummaryService } from './productSummaryService.js';
+import { ProductSummaryService } from './productSummaryService.js';
 
 /**
  * Spoken Response Planner & Speech Normalizer for Dial Mate 2.0
@@ -112,17 +112,19 @@ export class SpokenResponsePlanner {
 
     // 3. Order confirmation in voice
     if (intent === 'CONFIRM') {
-      if (activeOrder) {
-        const orderNum = activeOrder.orderNumber || '1643';
+      if (activeOrder && activeOrder.orderNumber) {
         return {
-          spokenText: `Bohat shukriya! Aapka order number ${orderNum} confirm kar diya gaya hai aur jald dispatch kar diya jayega.`,
+          spokenText: `Bohat shukriya! Aapka order number ${activeOrder.orderNumber} confirm kar diya gaya hai aur jald dispatch kar diya jayega.`,
           sendTextLink: false,
           textLinkMessage: null
         };
       } else if (activeProduct) {
         const names = ProductSummaryService.normalizeProductName(activeProduct.title);
+        const priceNum = Number(activeProduct.numericPrice || activeProduct.price || 0);
+        const deliveryNum = Number(activeProduct.deliveryCharge || 199);
+        const totalNum = priceNum > 0 ? (priceNum + deliveryNum) : 0;
         return {
-          spokenText: `Ji, aap ${names.shortSpokenName} confirm karna chahte hain? Main aapka order book karne mein madad kar deti hoon. Baraye meharbani apna delivery address aur city share kar dein.`,
+          spokenText: `Ji, aap naya order book karna chahte hain ${names.shortSpokenName} ka? Iski price ${priceNum} rupay aur delivery ${deliveryNum} rupay mila kar kul COD total ${totalNum.toLocaleString()} rupay banta hai, quantity ek. Naya order book karne ke liye baraye meharbani apna poora naam, phone number, mukammal delivery address aur shehar bata dein.`,
           sendTextLink: false,
           textLinkMessage: null
         };
@@ -131,10 +133,9 @@ export class SpokenResponsePlanner {
 
     // 4. Order cancellation in voice
     if (intent === 'CANCEL') {
-      if (activeOrder) {
-        const orderNum = activeOrder.orderNumber || '1643';
+      if (activeOrder && activeOrder.orderNumber) {
         return {
-          spokenText: `Theek hai, aapka order number ${orderNum} cancel kar diya gaya hai. Agar aapko koi aur product chahiye ho to hum se rabta kar sakte hain. Shukriya!`,
+          spokenText: `Theek hai, aapka order number ${activeOrder.orderNumber} cancel kar diya gaya hai. Agar aapko koi aur product chahiye ho to hum se rabta kar sakte hain. Shukriya!`,
           sendTextLink: false,
           textLinkMessage: null
         };
@@ -142,11 +143,10 @@ export class SpokenResponsePlanner {
     }
 
     // 5. Order status in voice
-    if (intent === 'ORDER_STATUS' && activeOrder) {
-      const orderNum = activeOrder.orderNumber || '1643';
+    if (intent === 'ORDER_STATUS' && activeOrder && activeOrder.orderNumber) {
+      const orderNum = activeOrder.orderNumber;
       const itemTitle = activeOrder.items || 'item';
       const cleanItem = ProductSummaryService.normalizeProductName(itemTitle).shortSpokenName;
-      const statusText = activeOrder.status || 'In Transit';
       return {
         spokenText: `Ji, order number ${orderNum} ${cleanItem} ka hai. Ye dispatch ho chuka hai aur courier ke paas hai. Expected delivery teen se paanch working days hai.`,
         sendTextLink: false,

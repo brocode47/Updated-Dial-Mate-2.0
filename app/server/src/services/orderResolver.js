@@ -96,10 +96,30 @@ export class OrderResolver {
         const queryOr = [];
         if (customerName) {
           const nameClean = customerName.toLowerCase().trim();
+          queryOr.push({ payload: { contains: customerName } });
           queryOr.push({ payload: { contains: nameClean } });
+          queryOr.push({ payload: { contains: customerName.toUpperCase() } });
+
+          try {
+            const matchingCustomers = await prisma.customer.findMany({
+              where: {
+                shopId,
+                OR: [
+                  { firstName: { contains: customerName } },
+                  { firstName: { contains: nameClean } },
+                  { lastName: { contains: customerName } }
+                ]
+              },
+              select: { id: true }
+            });
+            for (const c of matchingCustomers) {
+              queryOr.push({ customerId: c.id });
+            }
+          } catch (_) {}
         }
         if (city) {
           const cityClean = city.toLowerCase().trim();
+          queryOr.push({ payload: { contains: city } });
           queryOr.push({ payload: { contains: cityClean } });
         }
         if (address) {
@@ -148,7 +168,8 @@ export class OrderResolver {
       const cityClean = city.toLowerCase().trim();
       const cityMatches = filtered.filter(o => {
         const addr = String(o.shippingAddress || '').toLowerCase();
-        return addr.includes(cityClean);
+        const payloadStr = JSON.stringify(o.payload || {}).toLowerCase();
+        return addr.includes(cityClean) || payloadStr.includes(cityClean);
       });
       if (cityMatches.length > 0) {
         filtered = cityMatches;
@@ -165,6 +186,18 @@ export class OrderResolver {
       });
       if (nameMatches.length > 0) {
         filtered = nameMatches;
+      }
+    }
+
+    // Filter by time/date reference (e.g. "kal" / yesterday)
+    if (params.dateFilter === 'yesterday' || (params.rawMessage && /\b(kal|yesterday|kal\s*wala|kal\s*ko)\b/i.test(params.rawMessage))) {
+      const yesterdayMatches = filtered.filter(o => {
+        if (!o.createdAt) return false;
+        const diffMs = Date.now() - new Date(o.createdAt).getTime();
+        return diffMs < 48 * 60 * 60 * 1000;
+      });
+      if (yesterdayMatches.length > 0) {
+        filtered = yesterdayMatches;
       }
     }
 

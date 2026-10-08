@@ -1,7 +1,8 @@
-﻿import { redis } from '../lib/redis.js';
+import { redis } from '../lib/redis.js';
 
 // Fallback in-memory state store if Redis is offline
 const memoryStore = new Map();
+const aliasMap = new Map();
 const STATE_TTL_SECONDS = 3600; // 1 hour session memory
 const GREETING_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours conversation session expiry
 
@@ -16,8 +17,26 @@ const GREETING_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours conversation session
  *    pendingAction, rejectedProducts, conversationSummary, recentTurns, escalationState.
  * 2. Manages conversation lifecycle (greeting policy, closure and seamless resumption).
  * 3. Survives individual worker executions via Redis + robust memory fallback.
+ * 4. Canonical phone-keyed and conversation-id aliased state persistence.
  */
 export class ConversationStateService {
+  /**
+   * Registers a key alias (e.g. mapping conversationId -> shopId:canonicalPhone)
+   */
+  static registerAlias(sourceKey, targetKey) {
+    if (sourceKey && targetKey && sourceKey !== targetKey) {
+      aliasMap.set(sourceKey, targetKey);
+    }
+  }
+
+  /**
+   * Resolves canonical key if an alias exists
+   */
+  static resolveKey(key) {
+    if (!key) return key;
+    return aliasMap.get(key) || key;
+  }
+
   /**
    * Retrieves conversation session state
    * 
@@ -26,15 +45,24 @@ export class ConversationStateService {
    */
   static async getState(conversationId) {
     if (!conversationId) return {};
+    const canonicalKey = this.resolveKey(conversationId);
 
     try {
-      if (redis && redis.status === 'ready') {
-        const raw = await redis.get(`conv_state:${conversationId}`);
-        if (raw) return JSON.parse(raw);
+      if (redis && (redis.status === 'ready' || redis.status === 'connect')) {
+        let raw = await redis.get(`conv_state:${canonicalKey}`);
+        if (!raw && canonicalKey !== conversationId) {
+          raw = await redis.get(`conv_state:${conversationId}`);
+        }
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          memoryStore.set(canonicalKey, parsed);
+          memoryStore.set(conversationId, parsed);
+          return parsed;
+        }
       }
     } catch (_) {}
 
-    return memoryStore.get(conversationId) || {};
+    return memoryStore.get(canonicalKey) || memoryStore.get(conversationId) || {};
   }
 
   /**
@@ -108,13 +136,24 @@ export class ConversationStateService {
     // Rebuild compact summary
     updated.conversationSummary = this.buildSummary(updated);
 
+    const canonicalKey = this.resolveKey(conversationId);
+
     try {
-      if (redis && redis.status === 'ready') {
-        await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+      if (redis && (redis.status === 'ready' || redis.status === 'connect')) {
+        await redis.setex(`conv_state:${canonicalKey}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        if (canonicalKey !== conversationId) {
+          await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        }
       }
     } catch (_) {}
 
+    memoryStore.set(canonicalKey, updated);
     memoryStore.set(conversationId, updated);
+
+    if (process.env.ZARA_DEBUG_CONTEXT === 'true') {
+      console.log(`[STATE WRITE] key=${conversationId} canonical=${canonicalKey} activeProd=${updated.activeProduct?.title || 'none'} activeOrd=${updated.activeOrderNumber || 'none'}`);
+    }
+
     return updated;
   }
 
@@ -154,11 +193,16 @@ export class ConversationStateService {
       lastActivityTimestamp: Date.now(),
       updatedAt: Date.now()
     };
+    const canonicalKey = this.resolveKey(conversationId);
     try {
-      if (redis && redis.status === 'ready') {
-        await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+      if (redis && (redis.status === 'ready' || redis.status === 'connect')) {
+        await redis.setex(`conv_state:${canonicalKey}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        if (canonicalKey !== conversationId) {
+          await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        }
       }
     } catch (_) {}
+    memoryStore.set(canonicalKey, updated);
     memoryStore.set(conversationId, updated);
     return updated;
   }
@@ -375,11 +419,16 @@ export class ConversationStateService {
       lastActivityTimestamp: Date.now(),
       updatedAt: Date.now()
     };
+    const canonicalKey = this.resolveKey(conversationId);
     try {
-      if (redis && redis.status === 'ready') {
-        await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+      if (redis && (redis.status === 'ready' || redis.status === 'connect')) {
+        await redis.setex(`conv_state:${canonicalKey}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        if (canonicalKey !== conversationId) {
+          await redis.setex(`conv_state:${conversationId}`, STATE_TTL_SECONDS, JSON.stringify(updated));
+        }
       }
     } catch (_) {}
+    memoryStore.set(canonicalKey, updated);
     memoryStore.set(conversationId, updated);
     return updated;
   }

@@ -25,14 +25,22 @@ export class ResponsePlanner {
     let executedAction = extra.executedAction || intent;
 
     switch (intent) {
+      case 'PRODUCT_DETAIL':
+      case 'ORDINAL_REFERENCE':
       case 'PRODUCT_PRICE': {
         const prod = resolvedEntity?.entity || context.activeProduct;
         if (prod) {
           const names = ProductSummaryService.normalizeProductName(prod.title);
           const price = prod.numericPrice || prod.price;
-          textReply = `Ji, *${names.customerFriendlyName}* ki price Rs. ${price} hai.`;
+          if (/\b(link|url)\b/i.test(userMessage) && prod.url) {
+            textReply = `Ji, yeh raha direct link:\n🔗 ${prod.url}`;
+          } else if (extra.defaultReply) {
+            textReply = extra.defaultReply;
+          } else {
+            textReply = `Ji, *${names.customerFriendlyName}* ki price Rs. ${price} hai.`;
+          }
         } else {
-          textReply = `Aap kis product ki price maloom karna chahtay hain? Product ka naam bata dein.`;
+          textReply = extra.defaultReply || `Aap kis product ki price maloom karna chahtay hain? Product ka naam bata dein.`;
         }
         break;
       }
@@ -142,7 +150,7 @@ export class ResponsePlanner {
 
     return {
       textReply,
-      spokenText: voicePlan.spokenDialogue,
+      spokenText: voicePlan.spokenText || voicePlan.spokenScript || voicePlan.spokenDialogue || textReply,
       sendTextLink: voicePlan.sendTextLink,
       textLinkMessage: voicePlan.textLinkMessage,
       executedAction

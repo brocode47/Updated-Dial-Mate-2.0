@@ -180,6 +180,7 @@ export class WhatsAppAgentService {
         channel: 'WHATSAPP',
         status: 'ACTIVE'
       },
+      orderBy: { updatedAt: 'desc' },
       include: {
         messages: {
           orderBy: { createdAt: 'desc' },
@@ -199,6 +200,10 @@ export class WhatsAppAgentService {
         include: { messages: true }
       });
     }
+
+    // Canonical Key across Text, Voice, Image & Sessions
+    const conversationKey = `${shop.id}:${cleanPhone}`;
+    ConversationStateService.registerAlias(conversation.id, conversationKey);
 
     // 5. Human Takeover Check
     if (conversation.isTakeover) {
@@ -236,10 +241,11 @@ export class WhatsAppAgentService {
     const orders = await PhoneNormalizer.resolveOrders(shop.id, customer?.id, fromPhone);
     const recentOrder = orders[0] || null;
 
-    const state = await ConversationStateService.getState(conversation.id);
-    let activeProduct = await ConversationStateService.resolveActiveProduct(conversation.id);
+    const state = await ConversationStateService.getState(conversationKey);
+    let activeProduct = await ConversationStateService.resolveActiveProduct(conversationKey);
 
-    let activeOrder = recentOrder;
+    // STRICT: Only set activeOrder if explicitly resolved previously or in this turn
+    let activeOrder = null;
     if (state?.activeOrderNumber) {
       const exactMatch = await this.resolveOrderByNumber(shop.id, state.activeOrderNumber);
       if (exactMatch) {
@@ -262,7 +268,7 @@ export class WhatsAppAgentService {
       activeOrder = ref.entity;
     }
 
-    const candidateProduct = activeProduct || (await ConversationStateService.resolveProductReference(conversation.id, messageText));
+    const candidateProduct = activeProduct || (await ConversationStateService.resolveProductReference(conversationKey, messageText));
     const contextBefore = ConversationContextResolver.buildContextObject(state, ref, customer);
 
     // 9. Intent Resolution
@@ -273,18 +279,40 @@ export class WhatsAppAgentService {
       recentOrders: orders
     });
 
-    await ConversationStateService.recordTurn(conversation.id, {
+    await ConversationStateService.recordTurn(conversationKey, {
       sender: 'customer',
       text: messageText,
       intent: detected.intent
     });
 
     const storeName = shop.name || shop.domain.replace('.myshopify.com', '');
-    const shouldGreet = await ConversationStateService.shouldGreet(conversation.id, conversation.messages ? conversation.messages.length : 0);
+    const shouldGreet = await ConversationStateService.shouldGreet(conversationKey, conversation.messages ? conversation.messages.length : 0);
 
     let replyText = '';
     let executedAction = null;
     let usedLLM = false;
+
+    // Structured diagnostics & turn tracing for ZARA_DEBUG_CONTEXT
+    const stateBefore = {
+      activeTopic: state?.recentTopic || null,
+      activeProduct: activeProduct ? (activeProduct.title || activeProduct.name) : null,
+      activeOrder: activeOrder?.orderNumber || state?.activeOrderNumber || null,
+      customer: customer?.firstName || cleanPhone,
+      pendingAction: state?.pendingAction || null,
+      recentEntities: state?.recentEntities || []
+    };
+
+    const toolsCalled = [];
+    const toolResults = [];
+    const routingDecision = {
+      catalogSearch: false,
+      orderLookup: false,
+      customerLookup: false,
+      checkout: false,
+      LLM: false,
+      other: false
+    };
+    let responseSource = 'rule_engine';
 
     // =========================================================================
     // 10. DETERMINISTIC ACTION DISPATCHER
@@ -293,12 +321,16 @@ export class WhatsAppAgentService {
     // CASE A: Standalone Order Number Input (e.g. "123", "1643", "#1643")
     if (detected.intent === 'ORDER_NUMBER_INPUT') {
       executedAction = 'order_number_lookup';
+      routingDecision.orderLookup = true;
+      responseSource = 'order_resolver';
       const orderNum = detected.orderNumber;
+      toolsCalled.push(`OrderResolver.resolveOrderByNumber("${orderNum}")`);
       const orderFound = await this.resolveOrderByNumber(shop.id, orderNum);
 
       if (orderFound) {
+        toolResults.push(`Found Order #${orderFound.orderNumber}`);
         activeOrder = orderFound;
-        await ConversationStateService.setActiveOrder(conversation.id, orderFound);
+        await ConversationStateService.setActiveOrder(conversationKey, orderFound);
         const cleanItem = ProductSummaryService.normalizeProductName(orderFound.items || 'item').customerFriendlyName;
         const status = orderFound.status || 'Pending Confirmation';
 
@@ -308,8 +340,12 @@ export class WhatsAppAgentService {
           replyText = `Ji, order #${orderFound.orderNumber} ${cleanItem} ka hai. Iska status "${status}" hai. Kul COD total Rs. ${Number(orderFound.totalAmount).toLocaleString()} hai.`;
         }
       } else {
-        await ConversationStateService.updateState(conversation.id, {
-          activeOrderNumber: orderNum,
+        toolResults.push(`No match for Order #${orderNum}`);
+        // STRICT: Order does not exist. Never fall back to another order!
+        activeOrder = null;
+        await ConversationStateService.clearActiveOrder(conversationKey);
+        await ConversationStateService.updateState(conversationKey, {
+          activeOrderNumber: null,
           recentTopic: 'order',
           pendingAction: null
         });
@@ -324,7 +360,12 @@ export class WhatsAppAgentService {
       detected.intent === 'ORDER_SUMMARY'
     ) {
       executedAction = detected.intent === 'ORDER_STATUS' ? 'order_status_fastpath' : 'order_summary_fastpath';
-      await ConversationStateService.updateState(conversation.id, { recentTopic: 'order' });
+      routingDecision.orderLookup = true;
+      if (detected.intent === 'ORDER_LOOKUP_BY_DETAILS') {
+        routingDecision.customerLookup = true;
+      }
+      responseSource = 'order_resolver';
+      await ConversationStateService.updateState(conversationKey, { recentTopic: 'order' });
 
       const extracted = CheckoutStateMachine.extractCustomerInfo(messageText);
       const cleanMsg = messageText.toLowerCase();
@@ -332,6 +373,7 @@ export class WhatsAppAgentService {
       if (cleanMsg.includes('chair') || cleanMsg.includes('cover')) productHint = 'chair';
       if (cleanMsg.includes('snoring') || cleanMsg.includes('dilator')) productHint = 'snoring';
 
+      toolsCalled.push(`OrderResolver.resolveCustomerOrders({ customerName: "${extracted.name || ''}", city: "${extracted.city || ''}", product: "${productHint || ''}" })`);
       const orderLookup = await OrderResolver.resolveCustomerOrders({
         shopId: shop.id,
         fromPhone,
@@ -339,13 +381,15 @@ export class WhatsAppAgentService {
         city: extracted.city || customer?.city,
         address: extracted.address,
         productQuery: productHint,
-        orderNumber: detected.orderNumber || null
+        orderNumber: detected.orderNumber || null,
+        rawMessage: messageText
       });
 
       if (orderLookup.found && !orderLookup.multiple) {
+        toolResults.push(`Matched single Order #${orderLookup.order.orderNumber}`);
         const ord = orderLookup.order;
         activeOrder = ord;
-        await ConversationStateService.setActiveOrder(conversation.id, ord);
+        await ConversationStateService.setActiveOrder(conversationKey, ord);
         const cleanItem = ProductSummaryService.normalizeProductName(ord.items || 'item').customerFriendlyName;
         const status = ord.status || 'Pending Confirmation';
 
@@ -355,15 +399,21 @@ export class WhatsAppAgentService {
           replyText = `Aapke order #${ord.orderNumber} (${cleanItem}) ka current status "${status}" hai. Kul COD total Rs. ${Number(ord.totalAmount).toLocaleString()} hai.`;
         }
       } else if (orderLookup.found && orderLookup.multiple) {
+        toolResults.push(`Matched ${orderLookup.count} orders`);
         const list = orderLookup.orders.slice(0, 3).map(o => {
           const cleanItem = ProductSummaryService.normalizeProductName(o.items || 'item').customerFriendlyName;
           return `#${o.orderNumber} — ${cleanItem}`;
         }).join('\n');
         replyText = `Aapke ${orderLookup.count} orders record mein hain:\n\n${list}\n\nAap kis order ke baare mein maloomat chahtay hain?`;
-        await ConversationStateService.setPendingAction(conversation.id, 'AWAITING_ORDER_NUMBER');
+        await ConversationStateService.setPendingAction(conversationKey, 'AWAITING_ORDER_NUMBER');
       } else {
-        replyText = `Mujhe aapke number se koi order nahi mila. Kya aap apna order number (jaise #1643) share kar saktay hain taake main check kar sakoon?`;
-        await ConversationStateService.setPendingAction(conversation.id, 'AWAITING_ORDER_NUMBER');
+        toolResults.push(`No matching orders found`);
+        const detailParts = [];
+        if (extracted.name) detailParts.push(`naam: ${extracted.name}`);
+        if (extracted.city) detailParts.push(`shehar: ${extracted.city}`);
+        const detailsStr = detailParts.length > 0 ? ` (${detailParts.join(', ')})` : '';
+        replyText = `Maazrat, aapki details${detailsStr} se koi matching order record mein nahi mila. Baraye meharbani apna order number share karein ya phone number check kar lein.`;
+        await ConversationStateService.setPendingAction(conversationKey, 'AWAITING_ORDER_NUMBER');
       }
     }
 
@@ -384,7 +434,7 @@ export class WhatsAppAgentService {
             });
           }
           executedAction = 'cancel_order';
-          await ConversationStateService.updateState(conversation.id, {
+          await ConversationStateService.updateState(conversationKey, {
             activeOrderStatus: 'Cancelled',
             recentTopic: 'order'
           });
@@ -392,7 +442,7 @@ export class WhatsAppAgentService {
         }
       } else {
         executedAction = 'product_rejected';
-        await ConversationStateService.rejectProduct(conversation.id, activeProduct || null);
+        await ConversationStateService.rejectProduct(conversationKey, activeProduct || null);
         replyText = `Theek hai, koi baat nahi! Agar aap kuch aur dekhna chahein to product ka naam ya category bata dein, main madad kar deti hoon.`;
       }
     }
@@ -400,7 +450,7 @@ export class WhatsAppAgentService {
     // CASE D: Product Rejection
     else if (detected.intent === 'PRODUCT_REJECTION') {
       executedAction = 'product_rejected';
-      await ConversationStateService.rejectProduct(conversation.id, activeProduct || null);
+      await ConversationStateService.rejectProduct(conversationKey, activeProduct || null);
       replyText = `Theek hai, koi baat nahi! Agar aap kuch aur dekhna chahein to product ka naam ya category bata dein, main madad kar deti hoon.`;
     }
 
@@ -418,21 +468,25 @@ export class WhatsAppAgentService {
 
     // CASE E: Confirmation Flow (Existing Order vs New Product Purchase)
     else if (detected.intent === 'CONFIRM') {
-      const targetOrder = activeOrder || recentOrder;
-      if (targetOrder && (state?.recentTopic === 'order' || state?.activeOrderNumber || !activeProduct)) {
+      const targetOrder = activeOrder || (state?.recentTopic === 'order' ? recentOrder : null);
+      if (targetOrder && targetOrder.orderNumber && (state?.recentTopic === 'order' || state?.activeOrderNumber || !activeProduct)) {
+        routingDecision.orderLookup = true;
+        responseSource = 'order_confirmation';
         if (IntentResolver.isNegated(messageText, 'confirm')) {
           replyText = `Aapka order confirm nahi kiya gaya hai. Agar aap cancel karna chahtay hain to reply "2" ya "Cancel" likhein.`;
         } else if (targetOrder.status === 'Confirmed') {
           replyText = `Aapka order #${targetOrder.orderNumber} pehle hi confirm ho chuka hai aur dispatch ke liye tayyar hai!`;
         } else {
           if (targetOrder.orderId) {
+            toolsCalled.push(`confirm_order(${targetOrder.orderId})`);
             await ToolDispatcher.dispatch('confirm_order', { orderId: targetOrder.orderId }, {
               shopDomain: shop.domain,
               orderId: targetOrder.orderId
             });
+            toolResults.push(`Confirmed order #${targetOrder.orderNumber}`);
           }
           executedAction = 'confirm_order';
-          await ConversationStateService.updateState(conversation.id, {
+          await ConversationStateService.updateState(conversationKey, {
             activeOrderStatus: 'Confirmed',
             recentTopic: 'order'
           });
@@ -441,6 +495,9 @@ export class WhatsAppAgentService {
         }
       } else if (activeProduct || candidateProduct) {
         executedAction = 'confirm_product_booking';
+        routingDecision.checkout = true;
+        responseSource = 'checkout_engine';
+        toolsCalled.push('CheckoutStateMachine.processTurn');
         const prod = activeProduct || candidateProduct;
         const checkoutResult = CheckoutStateMachine.processTurn(
           state.checkoutState || {},
@@ -451,8 +508,9 @@ export class WhatsAppAgentService {
         const names = ProductSummaryService.normalizeProductName(prod.title);
         const quote = await DeliveryService.getDeliveryQuote({ shopDomain: shop.domain, subtotal: prod.numericPrice });
         const calc = DeliveryService.calculateTotal(prod.numericPrice, quote.deliveryCharge);
+        toolResults.push(`Initiated booking for ${prod.title}`);
 
-        await ConversationStateService.updateState(conversation.id, {
+        await ConversationStateService.updateState(conversationKey, {
           checkoutState: checkoutResult.checkout,
           currentProduct: prod,
           activeProduct: prod,
@@ -460,10 +518,10 @@ export class WhatsAppAgentService {
           activeDeliveryCharge: quote.deliveryCharge,
           activeProductTotal: calc.total,
           pendingAction: 'AWAITING_ADDRESS',
-          recentTopic: 'product'
+          recentTopic: 'checkout'
         });
 
-        replyText = `Ji, aap *${names.customerFriendlyName}* (Rs. ${prod.numericPrice} + Rs. ${quote.deliveryCharge} delivery, kul total Rs. ${calc.total}) confirm karna chahte hain? Main aapka order book karne mein madad kar deti hoon. Baraye meharbani apna mukammal delivery address aur city share kar dein.`;
+        replyText = `Ji, aap naya order book karna chahte hain *${names.customerFriendlyName}* (Rs. ${prod.numericPrice} + Rs. ${quote.deliveryCharge} delivery, kul total Rs. ${calc.total}, quantity 1) ka? Naya order book karne ke liye baraye meharbani apna poora naam, phone number, complete delivery address aur city share kar dein.`;
       } else {
         replyText = `Mujhe aapka koi pending order ya product nahi mila confirm karne ke liye. Agar aapke paas order number hai to zaroor batayein.`;
       }
@@ -478,13 +536,17 @@ export class WhatsAppAgentService {
     ) {
       if (activeProduct) {
         executedAction = 'checkout_details_update';
+        routingDecision.checkout = true;
+        responseSource = 'checkout_engine';
+        toolsCalled.push('CheckoutStateMachine.processTurn');
         const checkoutResult = CheckoutStateMachine.processTurn(
           state.checkoutState || {},
           messageText,
           { activeProduct, customer, senderPhone: cleanPhone }
         );
+        toolResults.push(`Checkout state updated: ready=${checkoutResult.isReadyForConfirmation}`);
 
-        await ConversationStateService.updateState(conversation.id, {
+        await ConversationStateService.updateState(conversationKey, {
           checkoutState: checkoutResult.checkout,
           pendingAction: checkoutResult.isReadyForConfirmation ? 'AWAITING_FINAL_CONFIRMATION' : 'COLLECTING_ADDRESS'
         });
@@ -576,15 +638,19 @@ export class WhatsAppAgentService {
             .replace(/\b(iska\s*total|total|bill|kitna|kitne|paise|amount|cod|kul|delivery\s*ke\s*sath|shipping\s*ke\s*sath|mila\s*k|mila\s*ke|hai|kya)\b/gi, '')
             .trim();
           if (cleanQuery) {
+            routingDecision.catalogSearch = true;
+            toolsCalled.push(`ShopifyCatalogService.searchProducts("${cleanQuery}")`);
             const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
             prod = searchRes.products?.[0] || null;
+            toolResults.push(prod ? `Found ${prod.title}` : 'No products found');
             if (prod) {
-              await ConversationStateService.setActiveProduct(conversation.id, prod);
+              await ConversationStateService.setActiveProduct(conversationKey, prod);
             }
           }
         }
         if (prod) {
           executedAction = 'total_inquiry_fastpath';
+          responseSource = 'total_inquiry';
           const names = ProductSummaryService.normalizeProductName(prod.title);
           const price = Number(prod.numericPrice || prod.price || 0);
           const delivery = Number(prod.deliveryCharge || 199);
@@ -601,21 +667,26 @@ export class WhatsAppAgentService {
 
     // CASE J: Product Price / Details
     else if (detected.intent === 'PRODUCT_DETAIL' || detected.intent === 'ORDINAL_REFERENCE') {
+      responseSource = 'product_detail';
       let prod = ref.entity || activeProduct || candidateProduct;
       if (!prod) {
         const cleanQuery = messageText
           .replace(/\b(ki\s*price|ka\s*rate|kitne\s*ka\s*hai|kitn[ey]\s*ka|price|rate|details|detail|batao|btao|bata\s*dein|hai|kya|mujhe|chahiye)\b/gi, '')
           .trim();
-        if (cleanQuery) {
+        const isPronounQuery = /^(iski|iska|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye|yeh|this|item|product|wo|woh)$/i.test(cleanQuery);
+        if (cleanQuery && !isPronounQuery) {
+          routingDecision.catalogSearch = true;
+          toolsCalled.push(`ShopifyCatalogService.searchProducts("${cleanQuery}")`);
           const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 1 });
           prod = searchRes.products?.[0] || null;
+          toolResults.push(prod ? `Found ${prod.title}` : 'No products found');
         }
       }
       if (prod) {
         executedAction = (ref.type === 'ORDINAL' || /\b(pehle|doosre|dusre|teesre|ye\s*wala|wo\s*wala|1st|2nd)\b/i.test(messageText)) ? 'ordinal_reference_resolution' : 'product_detail_resolution';
         const names = ProductSummaryService.normalizeProductName(prod.title);
-        await ConversationStateService.setActiveProduct(conversation.id, prod);
-        await ConversationStateService.updateState(conversation.id, {
+        await ConversationStateService.setActiveProduct(conversationKey, prod);
+        await ConversationStateService.updateState(conversationKey, {
           currentProduct: prod,
           activeProduct: prod,
           recentTopic: 'product'
@@ -632,23 +703,29 @@ export class WhatsAppAgentService {
           const cleanSummary = ProductSummaryService.cleanProductSummary(prod.title, prod.description);
           replyText = `Ji, *${names.customerFriendlyName}* ${prod.formattedPrice} ka hai.\n\nDelivery charges: Rs. ${quote.deliveryCharge}\nTotal: Rs. ${calc.total}\n\n${cleanSummary ? `${cleanSummary}\n\n` : ''}🔗 ${prod.url}`;
         }
+      } else {
+        replyText = `Aap kis product ki price ya details maloom karna chahtay hain? Product ka naam bata dein.`;
       }
     }
 
     // CASE K: Product Inquiry (Keyword Catalog Search)
     else if (detected.intent === 'PRODUCT_INQUIRY') {
       executedAction = 'product_inquiry_complete';
+      routingDecision.catalogSearch = true;
+      responseSource = 'product_inquiry';
       const cleanQuery = messageText
         .replace(/\b(mujhe|chahiye|chaiye|chahye|dikhao|batao|bhejo|hai|kya|aapke\s*paas|available|in\s*stock|stock|price|rate|kitne\s*ka|ki\s*price|ka\s*rate|details|detail|se\s*pareshani\s*hoti\s*hai|pareshani|masla|kitna|total|bata\s*dein)\b/gi, '')
         .trim();
       const targetQuery = cleanQuery || (candidateProduct ? candidateProduct.title : messageText);
+      toolsCalled.push(`ShopifyCatalogService.searchProducts("${targetQuery}")`);
       const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, targetQuery, { limit: 1 });
       const foundProduct = searchRes.products?.[0] || candidateProduct;
+      toolResults.push(foundProduct ? `Found ${foundProduct.title}` : 'No products found');
 
       if (foundProduct) {
         const names = ProductSummaryService.normalizeProductName(foundProduct.title);
         const cleanSummary = ProductSummaryService.cleanProductSummary(foundProduct.title, foundProduct.description);
-        await ConversationStateService.setActiveProduct(conversation.id, foundProduct);
+        await ConversationStateService.setActiveProduct(conversationKey, foundProduct);
 
         const quote = await DeliveryService.getDeliveryQuote({ shopDomain: shop.domain, subtotal: foundProduct.numericPrice });
         const calc = DeliveryService.calculateTotal(foundProduct.numericPrice, quote.deliveryCharge);
@@ -701,7 +778,7 @@ export class WhatsAppAgentService {
           conversationId: conversation.id
         }).catch(() => ({ escalated: true, alreadyEscalated: false }));
 
-        await ConversationStateService.markHumanEscalation(conversation.id, {
+        await ConversationStateService.markHumanEscalation(conversationKey, {
           notificationSent: true,
           notifiedAt: Date.now()
         });
@@ -742,7 +819,7 @@ export class WhatsAppAgentService {
       }
     } else if (detected.intent === 'SOCIAL_CLOSING') {
       executedAction = 'social_closing';
-      await ConversationStateService.updateState(conversation.id, { isClosed: true });
+      await ConversationStateService.updateState(conversationKey, { isClosed: true });
       replyText = `Allah Hafiz! Apna khayal rakhiye ga. Agar ainda koi bhi zaroorat ho to hum hazir hain!`;
     } else if (detected.intent === 'SOCIAL_THANKYOU') {
       executedAction = 'social_thankyou';
@@ -772,19 +849,31 @@ export class WhatsAppAgentService {
     // =========================================================================
     // 11. FALLBACK CONVERSATIONAL AI (GEMINI) — IF NOT HANDLED DETERMINISTICALLY
     // =========================================================================
+    const isOrderQuery =
+      detected.intent.startsWith('ORDER_') ||
+      detected.intent === 'CANCEL' ||
+      detected.intent === 'CONFIRM' ||
+      /\b(order|parcel|booking|tracking|delivery\s*status)\b/i.test(messageText);
+
     if (!replyText) {
       try {
         const aiClient = getAIClient();
         const availableTools = [
-          AITools.search_shopify_products,
-          AITools.get_shopify_product_details,
           AITools.get_delivery_quote,
-          AITools.get_shopify_collections,
           AITools.get_store_info,
           AITools.confirm_order,
           AITools.cancel_order,
           AITools.request_human_transfer
         ];
+
+        // AUTHORITATIVE ROUTING: NEVER provide catalog tools when customer asked for order lookup/status
+        if (!isOrderQuery) {
+          availableTools.unshift(
+            AITools.search_shopify_products,
+            AITools.get_shopify_product_details,
+            AITools.get_shopify_collections
+          );
+        }
 
         const systemInstruction = (
 `You are Zara, the courteous, intelligent AI customer support assistant for "${storeName}".
@@ -794,14 +883,15 @@ Speak natural, helpful Roman Urdu and English. Be concise, polite, and human-lik
 Customer & Store Context:
 - Store: ${storeName}
 - Customer Phone: ${cleanPhone}
-${activeOrder ? `- Active Order #${activeOrder.orderNumber} (Rs. ${activeOrder.totalAmount}) - Items: ${activeOrder.items} - Status: ${activeOrder.status}` : '- No active order.'}
+${activeOrder && activeOrder.orderNumber ? `- Active Order #${activeOrder.orderNumber} (Rs. ${activeOrder.totalAmount}) - Items: ${activeOrder.items} - Status: ${activeOrder.status}` : '- No active order.'}
 ${activeProduct ? `- Active/Discussed Product: ${activeProduct.title} (${activeProduct.formattedPrice}) - Link: ${activeProduct.url}` : '- No active product.'}
 ${state.rejectedProducts && state.rejectedProducts.length > 0 ? `- Rejected Products: ${state.rejectedProducts.map(p => p.title || p).join(', ')}` : ''}
 
 CRITICAL OPERATING RULES:
 1. Grounded Answers: Do NOT hallucinate order status or product prices.
 2. Contextual Resolution: "iski", "iska", "ye" refers to ${activeProduct?.title || 'active product'}.
-3. Human Assistance: If asked for real human or owner, call request_human_transfer.`
+3. Authoritative Order Scope: If the customer asks about an order, NEVER recommend or search unrelated products from the catalog.
+4. Human Assistance: If asked for real human or owner, call request_human_transfer.`
         );
 
         const prompt = `Customer: ${messageText}\nZara:`;
@@ -823,6 +913,8 @@ CRITICAL OPERATING RULES:
 
         const response = await Promise.race([geminiCall, timeoutPromise]);
         usedLLM = true;
+        routingDecision.LLM = true;
+        responseSource = 'gemini';
 
         const candidate = response.candidates?.[0];
         const functionCalls = candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall) || [];
@@ -830,31 +922,38 @@ CRITICAL OPERATING RULES:
         if (functionCalls.length > 0) {
           const call = functionCalls[0];
           executedAction = call.name;
-          const toolResult = await ToolDispatcher.dispatch(call.name, call.args || {}, {
-            shopDomain: shop.domain,
-            orderId: activeOrder?.orderId,
-            customerPhone: cleanPhone,
-            conversationId: conversation.id,
-            activeProduct
-          });
+          toolsCalled.push(`gemini_tool_call:${call.name}`);
 
-          if (call.name === 'search_shopify_products' && toolResult?.products?.length > 0) {
-            const prod = toolResult.products[0];
-            await ConversationStateService.setActiveProduct(conversation.id, prod);
-            replyText = `Ji, *${prod.title}* available hai (${prod.formattedPrice}).\n🔗 ${prod.url}`;
+          if (call.name === 'search_shopify_products' && isOrderQuery) {
+            toolResults.push('Rejected catalog search on order query');
+            replyText = `Aapke order ke hawalay se mujhe koi record nahi mila. Baraye meharbani apna order number share karein.`;
           } else {
-            replyText = toolResult?.message || `Ji, main samajh gayi hoon.`;
+            const toolResult = await ToolDispatcher.dispatch(call.name, call.args || {}, {
+              shopDomain: shop.domain,
+              orderId: activeOrder?.orderId,
+              customerPhone: cleanPhone,
+              conversationId: conversation.id,
+              activeProduct
+            });
+            toolResults.push(typeof toolResult === 'object' ? JSON.stringify(toolResult) : String(toolResult));
+
+            if (call.name === 'search_shopify_products' && toolResult?.products?.length > 0) {
+              const prod = toolResult.products[0];
+              await ConversationStateService.setActiveProduct(conversationKey, prod);
+              replyText = `Ji, *${prod.title}* available hai (${prod.formattedPrice}).\n🔗 ${prod.url}`;
+            } else {
+              replyText = toolResult?.message || `Ji, main samajh gayi hoon.`;
+            }
           }
         } else {
           replyText = (candidate?.content?.parts?.[0]?.text || '').trim();
         }
       } catch (geminiErr) {
         console.warn(`⚠️ [WhatsAppAgent] Gemini fallback note: ${geminiErr.message}.`);
-        if (recentOrder || activeOrder) {
-          const ord = recentOrder || activeOrder;
-          replyText = `Ji, main Zara hoon ${storeName} se. Main aapke order #${ord.orderNumber} aur delivery details ke hawalay se madad ke liye hazir hoon! Aap kya poochna chahtay hain?`;
+        if (activeOrder && activeOrder.orderNumber) {
+          replyText = `Ji, main Zara hoon ${storeName} se. Main aapke order #${activeOrder.orderNumber} aur delivery details ke hawalay se madad ke liye hazir hoon! Aap kya poochna chahtay hain?`;
         } else {
-          replyText = `Ji, main aapki request samajh gayi hoon. Kya aap mazeed details share kar sakte hain taake main sahi rehnumai kar sakoon?`;
+          replyText = `Ji, main Zara hoon ${storeName} se. Main aapki kya madad kar sakti hoon?`;
         }
       }
     }
@@ -921,7 +1020,7 @@ CRITICAL OPERATING RULES:
 
     // Telemetry Observability
     const contextAfter = ConversationContextResolver.buildContextObject(
-      await ConversationStateService.getState(conversation.id),
+      await ConversationStateService.getState(conversationKey),
       ref,
       customer
     );
@@ -955,6 +1054,81 @@ CRITICAL OPERATING RULES:
         status: 'SUCCESS'
       }
     }).catch(() => {});
+
+    if (process.env.ZARA_DEBUG_CONTEXT === 'true') {
+      const stateAfterRaw = await ConversationStateService.getState(conversationKey);
+      const finalStateAfter = {
+        activeTopic: stateAfterRaw?.recentTopic || null,
+        activeProduct: stateAfterRaw?.currentProduct ? (stateAfterRaw.currentProduct.title || stateAfterRaw.currentProduct.name) : null,
+        activeOrder: stateAfterRaw?.activeOrderNumber || null,
+        customer: customer?.firstName || cleanPhone,
+        pendingAction: stateAfterRaw?.pendingAction || null,
+        recentEntities: stateAfterRaw?.recentEntities || []
+      };
+
+      console.log(`
+------------------------------------------------------
+TURN DEBUG
+------------------------------------------------------
+
+messageId: ${messageId || 'N/A'}
+sender: ${fromPhone}
+inputType: ${isVoiceInbound ? 'voice' : 'text'}
+rawMessage: ${messageText}
+transcript: ${isVoiceInbound ? messageText : 'N/A'}
+normalizedMessage: ${messageText.toLowerCase().trim()}
+
+CONVERSATION STATE BEFORE:
+activeTopic: ${stateBefore.activeTopic || 'none'}
+activeProduct: ${stateBefore.activeProduct || 'none'}
+activeOrder: ${stateBefore.activeOrder || 'none'}
+customer: ${stateBefore.customer || 'none'}
+pendingAction: ${stateBefore.pendingAction || 'none'}
+recentEntities: ${JSON.stringify(stateBefore.recentEntities)}
+
+INTENT RESULT:
+intent: ${detected.intent}
+confidence: ${detected.confidence}
+resolver: ${executedAction || 'rule_engine'}
+
+ENTITY RESULT:
+entityType: ${ref?.entityType || ref?.type || 'none'}
+entityId: ${ref?.entity?.id || ref?.entity?.orderNumber || 'none'}
+entityTitle: ${ref?.entity?.title || ref?.entity?.items || 'none'}
+resolutionSource: ${ref?.strategy || ref?.type || 'context'}
+
+ROUTING DECISION:
+catalogSearch: ${routingDecision.catalogSearch}
+orderLookup: ${routingDecision.orderLookup}
+customerLookup: ${routingDecision.customerLookup}
+checkout: ${routingDecision.checkout}
+LLM: ${routingDecision.LLM}
+other: ${routingDecision.other}
+
+SELECTED HANDLER: ${executedAction || 'default'}
+
+TOOLS CALLED:
+${toolsCalled.length > 0 ? toolsCalled.map((t, i) => `${i + 1}. ${t}`).join('\n') : 'None'}
+
+TOOL RESULTS:
+${toolResults.length > 0 ? toolResults.join('\n') : 'None'}
+
+RESPONSE SOURCE: ${plannedResponse?.source || responseSource}
+
+CONVERSATION STATE AFTER:
+activeTopic: ${finalStateAfter.activeTopic || 'none'}
+activeProduct: ${finalStateAfter.activeProduct || 'none'}
+activeOrder: ${finalStateAfter.activeOrder || 'none'}
+customer: ${finalStateAfter.customer || 'none'}
+pendingAction: ${finalStateAfter.pendingAction || 'none'}
+recentEntities: ${JSON.stringify(finalStateAfter.recentEntities)}
+
+FINAL RESPONSE:
+${isVoiceInbound && plannedResponse.spokenText ? plannedResponse.spokenText : replyText}
+
+------------------------------------------------------
+`);
+    }
 
     return {
       success: true,
