@@ -285,7 +285,7 @@ export class IntentResolver {
       !/\b(confirm|cnfrm|confrim|cancel|cancle|dispatch)\b/i.test(clean) && (
         /\b(last\s*order|latest\s*order|recent\s*order|last\s*wala\s*order|jo\s*(tumhare\s*pas\s*)?last\s*order|mera\s*last\s*order|last\s*order\s*ka\s*number|latest\s*booking|meri\s*latest\s*booking|jo\s*last\s*order\s*aya)\b/i.test(clean) ||
         /\b(mera\s*order\s*kya\s*hai|kya\s*order\s*hai|order\s*details|kya\s*order\s*kiya|kya\s*mangwaya|mera\s*order|mere\s*kitne\s*orders)\b/i.test(clean) ||
-        /\b(mera\s*par[sc][ae]l\s*(kidr|kahan|kab)?|par[sc][ae]l\s*kab\s*ayega|order\s*kab\s*(ayega|milega)|(par[sc][ae]l|order)\s*kab\s*(ayega|milega|deliver|pohanchega)|kab\s*deliver\s*hoga|delivery\s*kab\s*(hogi|ho\s*gi)|order\s*kidr\s*hai|order\s*kahan\s*hai)\b/i.test(clean) ||
+        /\b(mera\s*par[sc][ae]l\s*(kidr|kahan|kab)?|par[sc][ae]l\s*kab\s*ayega|order\s*kab\s*(ayega|milega)|(par[sc][ae]l|order)\s*kab\s*(ayega|milega|deliver|pohanchega)|kab\s*deliver\s*hoga|delivery\s*kab\s*(hogi|ho\s*gi)|order\s*kidr\s*hai|order\s*kahan\s*hai|yeh?\s*kab\s*(?:tak\s*)?poh[ae]?n?ch\w*|ye\s*kab\s*ayega)\b/i.test(clean) ||
         /\b(kal\s*wala\s*order|jo\s*order\s*mene\s*kal\s*kiya|kal\s*(?:aik\s*|ek\s*)?order\s*kiya|mene\s*kal\s*.*order\s*kiya|order\s*kiya\s*tha|order\s*number\s*yad\s*nahi|order\s*no\s*yaad\s*nahi)\b/i.test(clean)
       )
     ) {
@@ -331,7 +331,7 @@ export class IntentResolver {
     if (/\b(thank\s*you|thanks|shukriya|meherbani)\b/i.test(clean)) {
       return { intent: 'SOCIAL_THANKYOU', confidence: 0.95 };
     }
-    if (/\b(neend\s*nahi|neend\s*nhi|girlfriend|kaisi\s*ho|kese\s*ho|kya\s*haal)\b/i.test(clean)) {
+    if (/\b(neend\s*nahi|neend\s*nhi|girlfriend|kaisi\s*ho|kese\s*ho|kya\s*haal|upset\s*h[uo]n?|udas\s*h[uo]n?|sad\s*h[uo]n?|pareshan\s*h[uo]n?|mood\s*kharab)\b/i.test(clean)) {
       return { intent: 'SOCIAL_CASUAL', confidence: 0.95 };
     }
 

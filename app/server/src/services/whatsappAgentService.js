@@ -375,7 +375,7 @@ export class WhatsAppAgentService {
       if (cleanMsg.includes('snoring') || cleanMsg.includes('dilator')) productHint = 'snoring';
 
       toolsCalled.push(`OrderResolver.resolveCustomerOrders({ customerName: "${extracted.name || ''}", city: "${extracted.city || ''}", product: "${productHint || ''}" })`);
-      const orderLookup = await OrderResolver.resolveCustomerOrders({
+      let orderLookup = await OrderResolver.resolveCustomerOrders({
         shopId: shop.id,
         fromPhone,
         customerName: extracted.name || customer?.firstName,
@@ -385,6 +385,10 @@ export class WhatsAppAgentService {
         orderNumber: detected.orderNumber || null,
         rawMessage: messageText
       });
+
+      if (!orderLookup.found && activeOrder && !detected.orderNumber && !extracted.name && !extracted.city && !productHint) {
+        orderLookup = { found: true, order: activeOrder, orders: [activeOrder], count: 1, multiple: false };
+      }
 
       if (orderLookup.found && !orderLookup.multiple) {
         toolResults.push(`Matched single Order #${orderLookup.order.orderNumber}`);
@@ -396,6 +400,8 @@ export class WhatsAppAgentService {
 
         if (/dispatch|transit|shipped|courier/i.test(status)) {
           replyText = `Ji, order #${ord.orderNumber} ${cleanItem} ka hai. Ye dispatch ho chuka hai aur courier ke paas hai. Expected delivery 3–5 working days hai.`;
+        } else if (/\b(kab|deliver|delivery|poh[ae]?n?ch|milega|ayega)\b/i.test(cleanMsg)) {
+          replyText = `Aapke order #${ord.orderNumber} (${cleanItem}) ka status "${status}" hai. Standard delivery time confirmation ke baad 3–5 working days hota hai.`;
         } else {
           replyText = `Aapke order #${ord.orderNumber} (${cleanItem}) ka current status "${status}" hai. Kul COD total Rs. ${Number(ord.totalAmount).toLocaleString()} hai.`;
         }
@@ -981,6 +987,8 @@ export class WhatsAppAgentService {
         replyText = `Aray, aisa hota hai! Kabhi kabhi neend nahi aati. Thora relax karein ya koi achi si kitab parhein, inshaAllah neend aa jaye gi.`;
       } else if (/girlfriend/i.test(messageText)) {
         replyText = `Aray, girlfriend ko manana to bohat zaroori hai! Koi acha sa gift ya unki pasand ki cheez dekh lein, mood foran theek ho jaye ga. Agar aap hamare store se kuch dekhna chahein to batayein!`;
+      } else if (/upset|udas|sad|pareshan|mood/i.test(messageText)) {
+        replyText = `Aray, pareshan ya upset mat hon! Sab theek ho jaye ga. Agar kisi cheez ya order ke hawalay se koi masla hai to mujhe batayein, main foran dekh leti hoon.`;
       } else {
         replyText = `Main bilkul theek hoon, shukriya! Aap sunayein, main aapki kya madad kar sakti hoon?`;
       }

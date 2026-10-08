@@ -534,4 +534,78 @@ describe('DIAL MATE 2.0 / ZARA — PHASE 5 PRODUCTION SPECIFICATION VERIFICATION
       }
     }
   });
+
+  // =========================================================================
+  // TEST 14 — PHASE 8 SPECIFIC GAPS: ORDER FOLLOW-UP (H), STATUS (I), EMOTION (J), VOICE ORDER CONTEXT (O)
+  // =========================================================================
+  it('TEST 14: Verifies order follow-up ("yeh kab pohanchega"), status ("iska status kya hai?"), emotion ("main upset hun"), and voice order continuity', async () => {
+    dbOrders = [
+      { orderNumber: '1643', customerPhone: TEST_PHONE, items: 'Wooden Silicone Chair Protection Cover', status: 'In Transit', totalAmount: 698 }
+    ];
+
+    const sessionKey = 'sess-p5-t14';
+
+    // 1. Resolve numeric order 1643
+    const turn1 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: sessionKey,
+      fromPhone: TEST_SENDER,
+      messageText: '1643'
+    });
+    expect(turn1.success).toBe(true);
+    expect(turn1.replyText).toContain('1643');
+
+    // 2. TEST H: Follow-up "yeh kab pohanchega"
+    const turn2 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: sessionKey,
+      fromPhone: TEST_SENDER,
+      messageText: 'yeh kab pohanchega'
+    });
+    expect(turn2.success).toBe(true);
+    expect(turn2.replyText).toContain('1643');
+    expect(turn2.replyText).toMatch(/dispatch|courier|delivery|3[–-]5/i);
+    expect(turn2.replyText).not.toBe('Ji, main samajh gayi hoon.');
+
+    // 3. TEST I: Status follow-up "iska status kya hai?"
+    const turn3 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: sessionKey,
+      fromPhone: TEST_SENDER,
+      messageText: 'iska status kya hai?'
+    });
+    expect(turn3.success).toBe(true);
+    expect(turn3.replyText).toContain('1643');
+
+    // 4. TEST J: Casual Emotion "main upset hun" -> empathetic, no escalation
+    sentWhatsAppMessages = [];
+    const turn4 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: sessionKey,
+      fromPhone: TEST_SENDER,
+      messageText: 'main upset hun'
+    });
+    expect(turn4.success).toBe(true);
+    expect(turn4.replyText).toMatch(/pareshan|upset|madad/i);
+    // MUST NOT automatically trigger human escalation
+    expect(sentWhatsAppMessages.some(m => /Human Support Request|Escalation/i.test(m.msg))).toBe(false);
+
+    // 5. TEST O: Voice order context "yeh kab pohanchega" via voice note
+    const turn5 = await WhatsAppAgentService.handleIncomingMessage({
+      shopId: SHOP_ID,
+      shopDomain: SHOP_DOMAIN,
+      sessionId: sessionKey,
+      fromPhone: TEST_SENDER,
+      messageText: 'yeh kab pohanchega',
+      isVoiceInbound: true
+    });
+    expect(turn5.success).toBe(true);
+    expect(turn5.isVoiceResponse).toBe(true);
+    expect(turn5.spokenText).toContain('1643');
+  });
 });
+
