@@ -1,4 +1,4 @@
-﻿import { ProductSummaryService } from './productSummaryService.js';
+import { ProductSummaryService } from './productSummaryService.js';
 import { getShopifyClient } from '../integrations/shopify/client.js';
 import { prisma } from '../lib/db.js';
 
@@ -103,6 +103,16 @@ export class ShopifyCatalogService {
         });
       } catch (dbErr) {
         console.warn(`âš ï¸ [ShopifyCatalogService] DB fallback failed: ${dbErr.message}`);
+      }
+      if (rawProducts.length === 0 && storefrontDomain && storefrontDomain.includes('.')) {
+        try {
+          const publicUrl = `https://${storefrontDomain}/products.json?limit=250`;
+          const resp = await fetch(publicUrl, { headers: { 'User-Agent': 'DialMate/2.0' } });
+          if (resp.ok) {
+            const data = await resp.json();
+            rawProducts = data.products || [];
+          }
+        } catch (_) {}
       }
     }
 
