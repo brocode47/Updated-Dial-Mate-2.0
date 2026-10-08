@@ -1,173 +1,192 @@
-# ZARA AI AGENT — PRODUCTION READINESS & CONVERSATION HARDENING REPORT
+# DIAL MATE 2.0 / ZARA — PRODUCTION READINESS & CONVERSATION HARDENING REPORT
 
 **Project:** Dial Mate 2.0  
-**AI Agent Persona:** Zara (Sunday Bazaaar Official)  
-**Date:** October 9, 2026  
-**Repository:** [Updated-Dial-Mate-2.0](https://github.com/brocode47/Updated-Dial-Mate-2.0)  
-**Branch:** `main`  
-**Test Suite Status:** **510 / 510 Passing (24 / 24 Test Files, 100% Clean)**  
-**Local Commit:** Production Hardening & Verification  
+**AI Agent Persona:** Zara  
+**Business / Store:** Sunday Bazaaar Official  
+**GitHub Repository:** [brocode47/Updated-Dial-Mate-2.0](https://github.com/brocode47/Updated-Dial-Mate-2.0)  
+**Production Server:** `193.123.73.113`  
+**Current Local Commit:** `dfa888c` (`fix(zara): validate production conversation and WhatsApp flows`)  
+**Current origin/main:** `26d196d`  
+**Automated Test Result:** **511 / 511 passing (24 / 24 test suites passing, 100% clean)**  
+**Overall Production Status:** **NOT PRODUCTION READY (DEPLOYMENT & PHYSICAL WHATSAPP BLOCKED)**  
 
 ---
 
-## Production Verification Matrix
+## 1. Phase 13 Production Readiness Verification Matrix
 
-| Area | Automated | Live | Status |
-|---|---|---|---|
-| Text conversation | PASS | NOT TESTED | PASS |
-| Voice input | PASS | NOT TESTED | PASS |
-| Voice output | PASS | NOT TESTED | PASS |
-| Text/voice context | PASS | NOT TESTED | PASS |
-| Product search | PASS | PASS | PASS |
-| Product pricing | PASS | PASS | PASS |
-| Delivery charges | PASS | PASS | PASS |
-| Product links | PASS | PASS | PASS |
-| Order lookup | PASS | NOT TESTED | PASS |
-| Order confirmation | PASS | NOT TESTED | PASS |
-| Order cancellation | PASS | NOT TESTED | PASS |
-| Shopify tags | PASS | NOT TESTED | PASS |
-| Human escalation | PASS | NOT TESTED | PASS |
-| Rejected product memory | PASS | NOT TESTED | PASS |
-| Pakistani language | PASS | NOT TESTED | PASS |
-| Latency | PASS | PASS | PASS |
-| WhatsApp | PASS | BLOCKED | BLOCKED |
-| GitHub | PASS | BLOCKED | BLOCKED |
-| Production deployment | PASS | BLOCKED | BLOCKED |
+> **Rule:** If Automated = `PASS` but Live = `NOT TESTED`, the status MUST NOT be called production `PASS`.  
+> Allowed statuses: `PASS`, `FAIL`, `BLOCKED`, `NOT TESTED`.
 
----
-
-## 1. Problems Discovered During Final Verification
-
-1. **Rejection Memory Leak in Catalog Search:** When a customer rejected a product (e.g. `"nahi mujhe nahi chahiye"`) and subsequently asked for a related collection or generic category (e.g. `"aur cleaning products dikhao"`), `ShopifyCatalogService.searchProducts` returned products where the first result could be the rejected item. The agent selected the first search match without filtering against `state.rejectedProducts`.
-2. **Hardcoded Fallback Placeholder (#1643):** When a customer asked about their order status and no orders were found for their registered number, the system fallback prompt included `"Kya aap apna order number (jaise #1643) share kar saktay hain"`, violating the rule: *"NEVER invent #1643. NEVER substitute another order."*
-3. **Unhydrated Human Escalation Alert Dispatch:** When human transfer was triggered, `ToolDispatcher.dispatch('request_human_transfer', ...)` was called before `HumanEscalationService.escalateToHuman`. Because the tool dispatch lacked customer phone, name, and product context, it triggered a deduplication lock and sent an incomplete WhatsApp alert (`"Customer phone: On file"`).
-4. **General Catalog Keyword & Discovery Intent Drop:** Colloquial inquiries such as `"19L bottle brush dikhao"` fell through to `GENERAL_QUERY` because catalog nouns (`brush`, `bottle`, `mat`, `holder`, `stand`, `cutter`, `mop`) and Discovery verbs (`dikhao`, `dikhana`, `show me`) were missing from `IntentResolver.js`.
-5. **Roman Urdu Contraction & Phrasing Gaps:** Common Pakistani Roman Urdu contractions like `"wo wala"` (without the 'h') dropped into `GENERAL_QUERY` instead of `ORDINAL_REFERENCE`, and `"mujhe apne order ka status required hai"` failed to match `ORDER_STATUS` due to the intervening phrase `"ka status"`.
-
----
-
-## 2. Root Causes & Architectural Resolutions
-
-1. **Candidate Selection Filter:** `WhatsAppAgentService.js` now filters `searchRes.products` across all discovery branches (Case H, Case I, Case J, Case K) with `(searchRes.products || []).filter(p => !ConversationStateService.isRejected(state, p))`. Rejected items are strictly excluded from subsequent recommendations.
-2. **Zero-Invention Order Prompting:** The generic order fallback in `whatsappAgentService.js` was updated to state: `"Maazrat, aapke number se koi matching order record mein nahi mila. Baraye meharbani apna order number share karein taake main check kar sakoon."` eliminating `#1643` entirely.
-3. **Rich Context Escalation Pipeline:** `whatsappAgentService.js` now passes the full customer context (`customerPhone: cleanPhone`, `customerName`, `customerCity`, `activeProduct`, `activeOrder`, `conversationSummary`) to `ToolDispatcher.dispatch('request_human_transfer')` and `HumanEscalationService.escalateToHuman`, ensuring complete alerts are dispatched to the business owner on WhatsApp.
-4. **Expanded Product Discovery Patterns:** `IntentResolver.js` was enhanced to recognize all Sunday Bazaaar catalog nouns (`brush`, `bottle`, `mat`, `cleaner`, `cleaning`, `lunch box`, `cutter`, `chopper`, `mop`, `dispenser`, `stand`, `holder`, `light`, `fan`, `watch`) and natural discovery phrasing (`/\b(dikhao|dikha\s*do|dikha\s*dein|dikhana|show\s*me|mujhe\s*.*chahiye)\b/i`).
-5. **Colloquial Pakistani Urdu Matching:** `IntentResolver.js` now accepts `woh?\s*wal[ae]y?` for ordinal product references and matches `(?:order|parcel)\s*(?:ka|ki|ke)?\s*status` and `/\border\b.*\bstatus\b/i` for order status inquiries.
+| Feature | Automated | Live | Evidence | Status |
+|---|---|---|---|---|
+| Greeting | PASS | NOT TESTED | Verified in automated tests (turn 1 "Hello"/"hey" -> natural Pakistani greeting without random product/search); Live WhatsApp blocked | NOT TESTED |
+| Product search | PASS | PASS | Sunday Bazaaar Shopify live catalog verified via API and live store at https://sundaybazaaar.store (200 OK) | PASS |
+| Product price | PASS | PASS | Wooden Silicone Chair Protection Cover price Rs. 499 confirmed on live Shopify store and grounded catalog service | PASS |
+| Delivery | PASS | PASS | Sunday Bazaaar standard delivery Rs. 199 confirmed on production service and live checkout | PASS |
+| Product total | PASS | PASS | 499 + 199 = Rs. 698 calculated and confirmed against live store pricing model | PASS |
+| Product link | PASS | PASS | Direct product URL https://sundaybazaaar.store/products/wooden-silicone-chair-protection-cover validated live (HTTP 200, 1041ms) | PASS |
+| Product context | PASS | NOT TESTED | Contextual pronoun resolution ("iski price", "iska total", "iska link") verified in 9-turn E2E suite; Live WhatsApp session blocked | NOT TESTED |
+| Order lookup | PASS | NOT TESTED | Multi-signal customer identity order resolution tested; production VPS database direct access blocked without SSH credentials | NOT TESTED |
+| Numeric order routing | PASS | NOT TESTED | Isolated order regex `^#?(\d{3,7})$` strictly routes to order lookup without catalog search in test suite; Live WhatsApp blocked | NOT TESTED |
+| Order follow-up | PASS | NOT TESTED | "yeh kab pohanchega" routes to ORDER_SUMMARY / status, retrieves active order #1643, avoids "Ji, main samajh gayi hoon"; Live WhatsApp blocked | NOT TESTED |
+| Order status | PASS | NOT TESTED | "iska status kya hai?" retrieves active order status from session in test suite; Live WhatsApp blocked | NOT TESTED |
+| Order confirmation | PASS | NOT TESTED | Complete checkout breakdown and missing data collection verified; Live order creation strictly prohibited per safety | NOT TESTED |
+| Order cancellation | PASS | NOT TESTED | Soft cancellation vs product dismissal vs negation suppression verified; Live order cancellation prohibited per safety | NOT TESTED |
+| Shopify tags | PASS | NOT TESTED | Tag application logic verified in phase3-step1.test.js; Live mutation of production orders prohibited per safety | NOT TESTED |
+| Human escalation | PASS | NOT TESTED | Owner WhatsApp notification creation verified in test 10; Live notification dispatch to owner blocked | NOT TESTED |
+| Continue after escalation | PASS | NOT TESTED | Zara continues answering immediately after human escalation in test 10; Live WhatsApp blocked | NOT TESTED |
+| Rejection memory | PASS | NOT TESTED | Rejected product (19L bottle brush) exclusion verified in test 9; Live WhatsApp blocked | NOT TESTED |
+| Pakistani language | PASS | NOT TESTED | 110/110 Roman Urdu colloquial phrases pass in customer matrix test suite; Live WhatsApp blocked | NOT TESTED |
+| Voice input | PASS | NOT TESTED | STT handling pipeline and voice inbound flags verified; Physical WhatsApp voice note delivery blocked | NOT TESTED |
+| Voice output | PASS | NOT TESTED | TextToSpeechService OGG Opus synthesis pipeline verified; Physical mobile audio playback blocked | NOT TESTED |
+| Voice context | PASS | NOT TESTED | Seamless 9-turn cross-modality (Text->Voice, Voice->Text, Voice->Voice) verified; Live WhatsApp blocked | NOT TESTED |
+| Mobile playback | PASS | NOT TESTED | OGG Opus audio header validation confirmed; Physical phone playback blocked | NOT TESTED |
+| Latency | PASS | PASS | Production endpoints respond in 38ms - 129ms; Live WhatsApp end-to-end latency not measured | PASS |
+| WA-AKG | PASS | PASS | https://wa.sundaybazaaar.com reachable (200 OK, 537ms); Webhook HMAC validation active (401 Unauthorized) | PASS |
+| Shopify | PASS | PASS | https://sundaybazaaar.store reachable (200 OK, 1041ms); catalog active and responsive | PASS |
+| GitHub | PASS | BLOCKED | `git push origin main` blocked by non-interactive credential requirement (`GITHUB_PUSH_BLOCKED`) | BLOCKED |
+| Production deployment | PASS | BLOCKED | SSH connection to `193.123.73.113` blocked (`Permission denied (publickey)`); container rebuild requires operator SSH | BLOCKED |
 
 ---
 
-## 3. Test Suites & Complete Test Run (510 / 510 Passing)
+## 2. Phase-by-Phase Verification Summary
 
-| Test Suite | Tests | Result |
+### Phase 1 — Git State
+- **HEAD Commit:** `dfa888c` (`fix(zara): validate production conversation and WhatsApp flows`)
+- **origin/main Commit:** `26d196d`
+- **Working Tree:** Clean. Local branch is ahead of `origin/main` by 8 commits.
+- **Remote:** `https://github.com/brocode47/Updated-Dial-Mate-2.0.git`
+
+### Phase 2 — GitHub Authentication
+- **Command:** `git push origin main`
+- **Result:** `fatal: could not read Username for 'https://github.com': No such file or directory`
+- **Status:** **`GITHUB_PUSH_BLOCKED`**
+- **Action Taken:** Adhered strictly to instructions: Did not retry repeatedly, did not create fake credentials, did not commit tokens or secrets.
+
+### Phase 3 & 4 — Production Server & Synchronization
+- **Server IP:** `193.123.73.113`
+- **SSH Test:** `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes opc@193.123.73.113 "echo SSH_OK"`
+- **Result:** `Permission denied (publickey,gssapi-keyex,gssapi-with-mic)`
+- **Status:** **`BLOCKED`**
+- **Action Taken:** SSH credentials are not available in the IDE sandbox. Deployment commands cannot be executed directly from this sandbox without the operator's private key.
+
+### Phase 5 — Docker Production Build
+- **Target:** Production VPS `193.123.73.113` Docker Compose services (`dialmate_api`, `dialmate_worker`, `Redis`, `PostgreSQL`, `WA-AKG`).
+- **Status:** **`BLOCKED`** (Prerequisite Phase 3 SSH access is blocked).
+
+### Phase 6 — Production Health Checks
+All public production endpoints were probed via live HTTP requests:
+1. `https://api.sundaybazaaar.com/api/health` → **200 OK** (`{"ok":true,"ts":1791497979526}`, Latency: 129ms)
+2. `https://api.sundaybazaaar.com/api/features` → **200 OK** (`appMode: single_store`, Latency: 38ms)
+3. `https://api.sundaybazaaar.com/` → **200 OK** (`Dial Mate Backend Running ✅`)
+4. `https://wa.sundaybazaaar.com` → **200 OK** (NextAuth & WA-AKG running on `193.123.73.113`, Latency: 537ms)
+5. `https://sundaybazaaar.store` → **200 OK** (Sunday Bazaaar Shopify storefront active, Latency: 1041ms)
+6. `https://api.sundaybazaaar.com/webhooks/wa-akg` → **401 Unauthorized** (Verified HMAC security signature enforcement)
+
+### Phase 7 & 8 — Phase 8 Gap Analysis & Hardening
+During inspection of the specification for Tests A through O, two concrete gaps were identified and resolved:
+1. **Test H ("yeh kab pohanchega"):**
+   - *Problem:* User follow-up "yeh kab pohanchega" following an active order #1643 previously resolved to `GENERAL_QUERY` (0.60 confidence) and fell through to the default acknowledgement: *"Ji, main samajh gayi hoon."*
+   - *Fix:* Added `yeh?\s*kab\s*(?:tak\s*)?poh[ae]?n?ch\w*|ye\s*kab\s*ayega` to `ORDER_SUMMARY` in `intentResolver.js`. In `whatsappAgentService.js`, when a contextual follow-up arrives with an active order in session, it grounds immediately on `activeOrder` and delivers the expected delivery timeframe (3–5 working days) instead of generic acknowledgement.
+2. **Test J ("main upset hun"):**
+   - *Problem:* Emotion queries dropped into `GENERAL_QUERY` without empathetic handling.
+   - *Fix:* Added `\b(upset\s*h[uo]n?|udas\s*h[uo]n?|sad\s*h[uo]n?|pareshan\s*h[uo]n?|mood\s*kharab)\b` to `SOCIAL_CASUAL` in `intentResolver.js`. Added empathetic response in `whatsappAgentService.js` (*"Aray, pareshan ya upset mat hon! Sab theek ho jaye ga..."*) without triggering human escalation.
+3. **Automated Test Validation:** Added dedicated test suite `TEST 14` in `tests/zara-phase5-verification.test.js` validating Tests H, I, J, and O. Full suite of **511 tests across 24 test suites passed with 100% clean output**.
+
+---
+
+## 3. Automated Test Suite Results (511 / 511 Passing)
+
+```
+Test Files  24 passed (24)
+     Tests  511 passed (511)
+  Duration  6.00s
+```
+
+| Test File | Passed Tests | Status |
 |---|---|---|
-| `tests/zara-phase5-verification.test.js` | 14 / 14 | ✅ PASSED |
-| `tests/zara-production-conversation.e2e.test.js` | 14 / 14 | ✅ PASSED |
-| `tests/zara-pakistani-customer-matrix.test.js` | 110 / 110 | ✅ PASSED |
-| `tests/productContextAndVoiceNote.test.js` | 40 / 40 | ✅ PASSED |
-| `tests/zara-god-level-context.test.js` | 21 / 21 | ✅ PASSED |
-| `tests/zara-contextual-intelligence.test.js` | 13 / 13 | ✅ PASSED |
-| `tests/saas-hardening-whatsapp.test.js` | 27 / 27 | ✅ PASSED |
-| `tests/dialmate-2.0-production-hardening.test.js` | 33 / 33 | ✅ PASSED |
-| `tests/conversational-shopify-agent.test.js` | 23 / 23 | ✅ PASSED |
-| `tests/business-grounding.test.js` | 34 / 34 | ✅ PASSED |
-| `tests/calling-automation-workflow.test.js` | 25 / 25 | ✅ PASSED |
-| `tests/ai-agent-upgrade.test.js` | 14 / 14 | ✅ PASSED |
-| `tests/ai-conversational-agent.test.js` | 12 / 12 | ✅ PASSED |
-| `tests/phase4-cod-workflow.test.js` | 23 / 23 | ✅ PASSED |
-| `tests/phase3-step1-fixes.test.js` | 11 / 11 | ✅ PASSED |
-| `tests/phase3-step1.test.js` | 2 / 2 | ✅ PASSED |
-| `tests/phase6-calling.test.js` | 9 / 9 | ✅ PASSED |
-| `tests/twilio-status-filtering.test.js` | 11 / 11 | ✅ PASSED |
-| `tests/wa-akg-contract.test.js` | 5 / 5 | ✅ PASSED |
-| `tests/wa-akg-tenant-webhook.test.js` | 5 / 5 | ✅ PASSED |
-| `tests/real-store-dry-run.test.js` | 21 / 21 | ✅ PASSED |
-| `tests/audioCodec.test.js` | 3 / 3 | ✅ PASSED |
-| `tests/whatsappSchema.test.js` | 6 / 6 | ✅ PASSED |
-| `tests/tool-result-sanitization.test.js` | 4 / 4 | ✅ PASSED |
-| **TOTAL** | **510 / 510** | **100% CLEAN** |
-
-**Execution Metrics:**
-- **Passed:** 510
-- **Failed:** 0
-- **Skipped:** 0
-- **Duration:** 7.93s
+| `tests/zara-phase5-verification.test.js` | 15 / 15 | ✅ PASS |
+| `tests/zara-production-conversation.e2e.test.js` | 14 / 14 | ✅ PASS |
+| `tests/zara-pakistani-customer-matrix.test.js` | 110 / 110 | ✅ PASS |
+| `tests/productContextAndVoiceNote.test.js` | 40 / 40 | ✅ PASS |
+| `tests/zara-god-level-context.test.js` | 21 / 21 | ✅ PASS |
+| `tests/zara-contextual-intelligence.test.js` | 13 / 13 | ✅ PASS |
+| `tests/saas-hardening-whatsapp.test.js` | 27 / 27 | ✅ PASS |
+| `tests/dialmate-2.0-production-hardening.test.js` | 33 / 33 | ✅ PASS |
+| `tests/conversational-shopify-agent.test.js` | 23 / 23 | ✅ PASS |
+| `tests/business-grounding.test.js` | 34 / 34 | ✅ PASS |
+| `tests/calling-automation-workflow.test.js` | 25 / 25 | ✅ PASS |
+| `tests/ai-agent-upgrade.test.js` | 14 / 14 | ✅ PASS |
+| `tests/ai-conversational-agent.test.js` | 12 / 12 | ✅ PASS |
+| `tests/phase4-cod-workflow.test.js` | 23 / 23 | ✅ PASS |
+| `tests/phase3-step1-fixes.test.js` | 11 / 11 | ✅ PASS |
+| `tests/phase3-step1.test.js` | 2 / 2 | ✅ PASS |
+| `tests/phase6-calling.test.js` | 9 / 9 | ✅ PASS |
+| `tests/twilio-status-filtering.test.js` | 11 / 11 | ✅ PASS |
+| `tests/wa-akg-contract.test.js` | 5 / 5 | ✅ PASS |
+| `tests/wa-akg-tenant-webhook.test.js` | 5 / 5 | ✅ PASS |
+| `tests/real-store-dry-run.test.js` | 21 / 21 | ✅ PASS |
+| `tests/audioCodec.test.js` | 3 / 3 | ✅ PASS |
+| `tests/whatsappSchema.test.js` | 6 / 6 | ✅ PASS |
+| `tests/tool-result-sanitization.test.js` | 4 / 4 | ✅ PASS |
 
 ---
 
-## 4. Phase 5 Verification Scenarios (Tests 1 - 13)
+## 4. Operator Deployment & Verification Playbook
 
-- **TEST 1 (Greeting & Discovery):** `"Hello"` yields warm natural greeting; `"Mujhe chair protection cover chahiye"` returns exact product title, price Rs. 499, delivery Rs. 199, total Rs. 698, concise description, and direct link. Zero web page HTML dumping.
-- **TEST 2 (Context):** `"iski price kya hai?"` grounds on Chair Protection Cover. Zero random searches triggered.
-- **TEST 3 (Total):** `"iska total?"` returns Chair Protection Cover total (Rs. 698).
-- **TEST 4 (Link):** `"iska link bhejo"` returns direct URL (`https://sundaybazaaar.store/products/wooden-silicone-chair-protection-cover-24-pcs`) without repeating verbose summary.
-- **TEST 5 (Voice Context):** Voice note `"iski price kya hai"` returns native WhatsApp voice note (`audio/ogg; codecs=opus`) for Chair Protection Cover.
-- **TEST 6 (Voice -> Text):** Voice note `"iska total kitna hai?"` followed by text `"aur iska link bhejo"` retains identical product context.
-- **TEST 7 (Order Lookup & Truthfulness):** `"mera order kahan pohancha?"` searches actual orders. With no orders, clearly states no order was found; NEVER invents `#1643`. With multiple orders, lists them and prompts for clarification.
-- **TEST 8 (Order Confirmation):** `"mera order confirm krdo"` identifies product, quantity 1, price Rs. 499, delivery Rs. 199, total Rs. 698, and collects only missing customer data (Name, Phone, Address, City).
-- **TEST 9 (Product Rejection Memory):** `"19L bottle brush dikhao"` -> `"nahi mujhe nahi chahiye"` -> `"aur cleaning products dikhao"`. Rejection memory suppresses the rejected bottle brush and surfaces alternative cleaning collection items.
-- **TEST 10 (Human Escalation):** `"mujhe real person se baat karni hai"` creates escalation record, dispatches structured WhatsApp notification to business owner containing customer phone, name, product context, and reason. Zara continues answering subsequent inquiries smoothly (`"acha chair cover ki price kya hai?"`).
-- **TEST 11 (Casual Chat):** `"tumhara naam kya hai?"` identifies Zara naturally; `"mujhse friendship karogi?"` gives friendly natural response without advertising products.
-- **TEST 12 (Frustration Handling):** `"yr tumahra masla kya hy"` responds calmly and politely with zero unsolicited product promotion.
-- **TEST 13 (Pakistani Language Matrix):** Correctly classifies and resolves 17 colloquial Pakistani phrases (typos, phonetics, slang, contractions, and negation).
+Because the Antigravity sandbox environment does not possess GitHub write credentials or VPS SSH private keys, the operator must complete the remaining 2 steps to synchronize and deploy:
 
----
+### Step 1: Push Validated Commits to GitHub
+On your local terminal:
+```bash
+cd "C:\Users\Engr Arslan\.gemini\antigravity-ide\scratch\Updated-Dial-Mate-2.0"
+git push origin main
+```
+Verify synchronization:
+```bash
+git rev-parse HEAD
+git rev-parse origin/main
+# Both MUST match: dfa888c...
+```
 
-## 5. Live Production Infrastructure Status
+### Step 2: Deploy to Production VPS (`193.123.73.113`)
+SSH into the production server using your authorized key:
+```bash
+ssh opc@193.123.73.113
+```
+Synchronize repository:
+```bash
+cd /opt/dialmate
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+git rev-parse HEAD
+# Ensure it matches: dfa888c...
+```
+Rebuild and restart production containers:
+```bash
+docker compose build dialmate_api dialmate_worker
+docker compose up -d
+docker compose ps
+```
+Inspect logs to ensure zero crashes:
+```bash
+docker logs -f dialmate_api --tail 50
+docker logs -f dialmate_worker --tail 50
+```
 
-| Service | Host / Endpoint | Status | Evidence / Notes |
-|---|---|---|---|
-| **API** | `https://api.sundaybazaaar.com` | **200 OK** | Responds `Dial Mate Backend Running ✅`, `/api/health` 200 OK, `/api/features` 200 OK |
-| **WA-AKG** | `https://wa.sundaybazaaar.com` | **200 OK** | NextAuth + WA-AKG active on IP `193.123.73.113` |
-| **Postgres** | `193.123.73.113:5432` | **RUNNING** | Production database container active on VPS |
-| **Redis** | `193.123.73.113:6379` | **RUNNING** | Production BullMQ / state cache container active on VPS |
-| **Shopify Store** | `https://sundaybazaaar.store` | **200 OK** | Live catalog queried: 19+ live products retrieved including Chair Protection Cover at Rs. 499 |
-
----
-
-## 6. Voice Quality Standards
-
-- **Audio Container & Codec:** OGG container, Opus codec, 48kHz, mono channel, MIME `audio/ogg; codecs=opus`.
-- **Cross-Platform Compatibility:** Plays natively on Android WhatsApp, iOS WhatsApp, and WhatsApp Desktop.
-- **Speech Naturalness:** Spoken Response Planner converts written numbers to conversational Roman Urdu (`rupay`), strips markdown (`*`, `_`, `#`), strips links/URLs, and avoids repetitive delivery fee statements.
-
----
-
-## 7. Latency Profile
-
-| Stage | Measured Latency |
-|---|---|
-| Inbound Webhook Signature Check | 1ms – 3ms |
-| Queue Ingestion & Worker Dispatch | 8ms – 20ms |
-| Intent & Entity Resolution | 4ms – 12ms |
-| Catalog Search (Memory Cache) | < 1ms |
-| Catalog Search (REST / Storefront API) | 350ms – 550ms |
-| Response Planning & Quality Control | 5ms – 15ms |
-| Text-to-Speech Synthesis (OGG Opus) | 400ms – 850ms |
-| **Total Turnaround (Text Inbound -> Text Outbound)** | **~90ms – 220ms** |
-| **Total Turnaround (Voice Inbound -> Voice Outbound)** | **~600ms – 1100ms** |
-
----
-
-## 8. Git & Remote Status
-
-- **Working Tree:** Clean (all code and test changes committed).
-- **Latest Local Commit:** `chore(zara): production validation and final conversation hardening`
-- **Remote `origin/main`:** `26d196ddb973a24dec489bf3e2a902606691a7da`
-- **GitHub Synchronization Status:** **BLOCKED**
-- **Exact Blocking Reason:** In this sandboxed environment, HTTPS push to `https://github.com/brocode47/Updated-Dial-Mate-2.0.git` requires interactive GitHub authentication or a personal access token (`fatal: could not read Username for 'https://github.com': No such file or directory`). Local commits are ready and will synchronize immediately upon providing GitHub PAT or SSH access.
-
----
-
-## 9. Next Steps for Operator
-
-1. **GitHub Sync:** Provide GitHub PAT or configure SSH key, then run:
-   ```powershell
-   git push origin main
-   ```
-2. **Production Container Deployment:** On Linux host `193.123.73.113`:
-   ```bash
-   cd /path/to/Updated-Dial-Mate-2.0
-   git pull origin main
-   docker compose -f docker-compose.prod.yml up -d --build
-   ```
-3. **Live WhatsApp Handset Pairing:** Log into `https://wa.sundaybazaaar.com` to scan the WhatsApp QR code for the Sunday Bazaaar customer service line.
+### Step 3: Conduct Live WhatsApp Test with Authorized Number (`+923333255998`)
+Send the sequence from Test A to Test O on WhatsApp to verify physical end-to-end delivery:
+1. `hey` -> Natural greeting (no product spam)
+2. `mujhe chair protection cover chahiye` -> Product card with price, delivery, total, direct URL
+3. `iski price kya hai` -> Rs. 499 (retains context)
+4. `iska total?` -> Rs. 698
+5. `iska link bhejo` -> Direct URL
+6. `mera order check karo` -> Order status or asks for order number
+7. `1643` -> Order #1643 status
+8. `yeh kab pohanchega` -> Delivery timeframe for #1643 (not "Ji, main samajh gayi hoon")
+9. `iska status kya hai?` -> Status of #1643
+10. `main upset hun` -> Empathetic message, no human escalation
+11. `mujhe real person se baat karni hai` -> Dispatches alert to owner, continues answering
+12. `19L bottle brush dikhao` -> `nahi mujhe nahi chahiye` -> `aur cleaning products dikhao` -> excludes brush
+13. Send voice note: `"chair protection cover ki price kya hai"` -> Playable OGG Opus voice reply
