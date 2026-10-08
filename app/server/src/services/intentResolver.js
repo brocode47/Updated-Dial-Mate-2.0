@@ -34,6 +34,43 @@ export class IntentResolver {
   }
 
   /**
+   * Pre-normalization pass for phonetic spelling, typos, abbreviations and Roman Urdu variations
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  static normalizeText(text = '') {
+    if (!text) return '';
+    let t = String(text).toLowerCase().trim();
+
+    // Common phonetic substitutions & contractions
+    t = t.replace(/\b(mujhy|muje|mjhe|mujy|mje|muj)\b/gi, 'mujhe');
+    t = t.replace(/\b(chahiye|chaiye|chahye|chaia|chahie|chaheye|chahiy)\b/gi, 'chahiye');
+    t = t.replace(/\b(protekshan|protekshin|protact|protector)\b/gi, 'protection');
+    t = t.replace(/\b(chear|chaer|chayer)\b/gi, 'chair');
+    t = t.replace(/\b(delivry|delvry|dilvery|dilevery|dlvery)\b/gi, 'delivery');
+    t = t.replace(/\b(pohcha|pohncha|poncha|pahuncha|pohancho|pahancha)\b/gi, 'pohancha');
+    t = t.replace(/\b(kidr|kdr|kidhar)\b/gi, 'kahan');
+    t = t.replace(/\b(cnfrm|confrim|confrm|cnfirm)\b/gi, 'confirm');
+    t = t.replace(/\b(cancle|cancil|cancl)\b/gi, 'cancel');
+    t = t.replace(/\b(plz|plse|plese)\b/gi, 'please');
+    t = t.replace(/\b(btao|btado|batadein|bta|btayein)\b/gi, 'batao');
+    t = t.replace(/\b(yr|yara)\b/gi, 'yaar');
+    t = t.replace(/\b(kitny|kitney)\b/gi, 'kitne');
+    t = t.replace(/\b(kro|krow)\b/gi, 'karo');
+    t = t.replace(/\b(krdo|kardo)\b/gi, 'kar do');
+    t = t.replace(/\b(krna|karna)\b/gi, 'karna');
+    t = t.replace(/\b(kr)\b/gi, 'kar');
+    t = t.replace(/\b(mt)\b/gi, 'mat');
+    t = t.replace(/\b(nhi|nai)\b/gi, 'nahi');
+    t = t.replace(/\b(kb)\b/gi, 'kab');
+    t = t.replace(/\b(kaha|kha)\b/gi, 'kahan');
+
+
+    return t;
+  }
+
+  /**
    * Resolves the customer's intent from the message and conversation context
    *
    * @param {string} text
@@ -41,7 +78,7 @@ export class IntentResolver {
    * @returns {{ intent: string, confidence: number, [key: string]: any }}
    */
   static resolveIntent(text = '', context = {}) {
-    const clean = String(text || '').toLowerCase().trim();
+    const clean = this.normalizeText(text);
     const state = context.state || {};
 
     // 1. Direct code shortcuts
@@ -68,6 +105,14 @@ export class IntentResolver {
       /\b(main\s*kabhi\s*ab\s*.*shopping\s*nahi)\b/i.test(clean)
     ) {
       return { intent: 'CUSTOMER_COMPLAINT', confidence: 0.96 };
+    }
+
+    // 2c. Customer Frustration & Attitude ("yr tumhara masla kya hai", "tum kya bata rahi ho", "bekar bot ho")
+    if (
+      /\b(tum\s*kya\s*bata\s*rahi\s*ho|tumhara\s*masla\s*kya\s*hai|tmhara\s*masla\s*kya\s*hai|bekar\s*bot|bakwas\s*bot|fuzool\s*bot|fazol\s*bot|samajh\s*nahi\s*aa\s*raha|samjh\s*nhi\s*ara|kya\s*bakwas\s*hai|kisi\s*kaam\s*ki\s*nahi|dimagh\s*kharab|dimaag\s*kharab|chup\s*karo|shut\s*up|idiot|pagal\s*bot)\b/i.test(clean) ||
+      /\b(masla\s*kya\s*hai|kya\s*masla\s*hai|tumhara\s*kya\s*masla\s*hai)\b/i.test(clean)
+    ) {
+      return { intent: 'CUSTOMER_FRUSTRATION', confidence: 0.98 };
     }
 
     // 3. Negations & Hesitations

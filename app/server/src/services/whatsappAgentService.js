@@ -17,6 +17,7 @@ import { ConversationContextResolver, ResolvedEntityType } from './conversationC
 import { CheckoutStateMachine, CheckoutStep } from './checkoutStateMachine.js';
 import { IntentResolver } from './intentResolver.js';
 import { ResponsePlanner } from './responsePlanner.js';
+import { ResponseQualityControlService } from './responseQualityControlService.js';
 
 /**
  * WhatsApp AI Customer Agent Service ("Zara 2.0")
@@ -529,10 +530,30 @@ export class WhatsAppAgentService {
 
     // CASE F: Inbound Checkout Details (Address, Name, City)
     else if (
-      state.recentTopic === 'checkout' ||
-      state.pendingAction === 'COLLECTING_ADDRESS' ||
-      state.pendingAction === 'AWAITING_ADDRESS' ||
-      state.pendingAction === 'COLLECTING_CHECKOUT_DETAILS'
+      (state.recentTopic === 'checkout' ||
+       state.pendingAction === 'COLLECTING_ADDRESS' ||
+       state.pendingAction === 'AWAITING_ADDRESS' ||
+       state.pendingAction === 'COLLECTING_CHECKOUT_DETAILS') &&
+      ![
+        'COLLECTION',
+        'CATALOG',
+        'STORE_LINK',
+        'MORE',
+        'HUMAN_TRANSFER',
+        'OWNER_INFO',
+        'BOT_IDENTITY',
+        'CUSTOMER_FRUSTRATION',
+        'CUSTOMER_COMPLAINT',
+        'SOCIAL_FRIENDSHIP',
+        'SOCIAL_CLOSING',
+        'SOCIAL_THANKYOU',
+        'SOCIAL_CASUAL',
+        'PRODUCT_INQUIRY',
+        'PRODUCT_DETAIL',
+        'ORDER_STATUS',
+        'ORDER_SUMMARY',
+        'ORDER_LOOKUP_BY_DETAILS'
+      ].includes(detected.intent)
     ) {
       if (activeProduct) {
         executedAction = 'checkout_details_update';
@@ -791,6 +812,9 @@ export class WhatsAppAgentService {
     else if (detected.intent === 'CUSTOMER_COMPLAINT') {
       executedAction = 'customer_complaint_retention';
       replyText = `Mujhe intehai afsos hai ke aapko hamari service se itni disappointment hui. Main aapki baat ko bohat sanjeedgi se le rahi hoon. Humari human support team jald aap se rabta karegi.`;
+    } else if (detected.intent === 'CUSTOMER_FRUSTRATION') {
+      executedAction = 'customer_frustration_resolution';
+      replyText = `Mujhe intehai afsos hai agar meri kisi baat se pareshani hui. Main behtar samajhne ki poori koshish kar rahi hoon. Agar aap chahein to main live human support team ko inform kar doon taake woh aapse direct rabta kar lein?`;
     } else if (detected.intent === 'SOCIAL_FRIENDSHIP') {
       executedAction = 'social_friendship';
       replyText = `Haha, bilkul! Main Sunday Bazaaar ki taraf se aapki digital dost hi hoon. Batayein main aaj aapki kya madad karoon?`;
@@ -799,7 +823,19 @@ export class WhatsAppAgentService {
       replyText = `Ji theek hai, aap aaram se check kar lein. Main yahin hoon jab bhi aapko zaroorat ho!`;
     } else if (detected.intent === 'COLLECTION') {
       executedAction = 'collection_view';
-      replyText = `Sunday Bazaaar ke collections dekhne ke liye:\n🔗 https://sundaybazaaar.store/collections/kitchen-collections`;
+      let categoryMatch = null;
+      if (/clean/i.test(messageText)) categoryMatch = 'cleaning';
+      else if (/kitchen/i.test(messageText)) categoryMatch = 'kitchen';
+      else if (/mobile/i.test(messageText)) categoryMatch = 'mobile';
+      else if (/women/i.test(messageText)) categoryMatch = 'women';
+      
+      const cols = await ShopifyCatalogService.getCollections(shop.domain, categoryMatch);
+      const col = cols[0];
+      if (col) {
+        replyText = `Ji, hamari ${col.title} yahan dekh sakte hain:\n🔗 ${col.url}\n\nAap collection mein tamam available products, prices aur details dekh sakte hain.`;
+      } else {
+        replyText = `Sunday Bazaaar ke collections dekhne ke liye:\n🔗 https://${shop.domain || 'sundaybazaaar.store'}/collections/all-products`;
+      }
     } else if (detected.intent === 'CATALOG') {
       executedAction = 'catalog_view';
       replyText = `Sunday Bazaaar ke tamam products hamari website par available hain:\n🔗 https://sundaybazaaar.store`;
@@ -976,11 +1012,31 @@ CRITICAL OPERATING RULES:
       extra: { defaultReply: replyText, executedAction }
     });
 
+    // Run Pre-Dispatch Response Quality Control & Truth Validation
+    const qcResult = ResponseQualityControlService.validateAndRepair({
+      replyText: plannedResponse.replyText || replyText,
+      spokenText: plannedResponse.spokenText,
+      intent: detected.intent,
+      activeProduct,
+      activeOrder,
+      userMessage: messageText,
+      isVoiceInbound,
+      rejectedProducts: state?.rejectedProducts || [],
+      storeDomain: shop.domain || 'sundaybazaaar.store'
+    });
+
+    const finalReplyText = qcResult.replyText;
+    const finalSpokenText = qcResult.spokenText;
+
+    if (qcResult.repaired) {
+      console.log(`🛡️ [QC:REPAIRED] Outbound response repaired: ${qcResult.issues.join(' | ')}`);
+    }
+
     // Safe outbound dispatch
     try {
       if (isVoiceInbound) {
         console.log(`🎙️ [WhatsApp:VOICE_IN] Voice note received. Generating spoken voice response.`);
-        const ttsResult = await TextToSpeechService.synthesize(plannedResponse.spokenText);
+        const ttsResult = await TextToSpeechService.synthesize(finalSpokenText);
         if (ttsResult.success && ttsResult.buffer && ttsResult.buffer.length > 0) {
           const fileName = 'zara_voice_note.ogg';
           if (typeof waClient?.sendMediaMessage === 'function') {
@@ -1006,12 +1062,12 @@ CRITICAL OPERATING RULES:
           }
         } else {
           if (typeof waClient?.sendMessage === 'function') {
-            await waClient.sendMessage(fromPhone, replyText, { quotedMessageId: messageId || undefined });
+            await waClient.sendMessage(fromPhone, finalReplyText, { quotedMessageId: messageId || undefined });
           }
         }
       } else {
         if (typeof waClient?.sendMessage === 'function') {
-          await waClient.sendMessage(fromPhone, replyText, { quotedMessageId: messageId || undefined });
+          await waClient.sendMessage(fromPhone, finalReplyText, { quotedMessageId: messageId || undefined });
         }
       }
     } catch (sendErr) {
@@ -1035,7 +1091,7 @@ CRITICAL OPERATING RULES:
       actionExecuted: executedAction,
       contextAfter,
       outboundModality: isVoiceInbound ? 'voice' : 'text',
-      replyText
+      replyText: finalReplyText
     });
 
     // Record interaction log for SaaS analytics & observability
@@ -1132,11 +1188,11 @@ ${isVoiceInbound && plannedResponse.spokenText ? plannedResponse.spokenText : re
 
     return {
       success: true,
-      replyText,
+      replyText: finalReplyText,
       intent: detected.intent,
       action: executedAction,
       usedLLM,
-      spokenText: plannedResponse.spokenText,
+      spokenText: finalSpokenText,
       isVoiceResponse: Boolean(isVoiceInbound)
     };
   }

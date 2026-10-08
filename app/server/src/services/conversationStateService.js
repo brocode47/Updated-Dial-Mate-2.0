@@ -30,6 +30,14 @@ export class ConversationStateService {
   }
 
   /**
+   * Clears in-memory state store and alias map (useful for test isolation)
+   */
+  static clearMemory() {
+    memoryStore.clear();
+    aliasMap.clear();
+  }
+
+  /**
    * Resolves canonical key if an alias exists
    */
   static resolveKey(key) {

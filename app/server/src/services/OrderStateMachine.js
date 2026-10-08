@@ -73,10 +73,13 @@ export class OrderStateMachine {
       try {
         if (newStatus === OrderStatus.CONFIRMED) {
           await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CONFIRMED');
+          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Confirmed');
         } else if (newStatus === OrderStatus.CANCELLED) {
           await addOrderTag(order.shop.domain, shopifyOrderId, 'COD_CANCELLED');
+          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Cancel Requested');
         } else if (newStatus === OrderStatus.HUMAN_REQUIRED) {
           await addOrderTag(order.shop.domain, shopifyOrderId, 'HUMAN_REVIEW_NEEDED');
+          await addOrderTag(order.shop.domain, shopifyOrderId, 'AI Escalated');
         }
       } catch (err) {
         console.warn(`⚠️ Could not sync tag for ${newStatus} to Shopify (Order ${shopifyOrderId}):`, err.message);
