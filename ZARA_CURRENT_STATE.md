@@ -8,34 +8,15 @@
 
 ## 1. Git State & Working Tree Audit
 
-- **Current HEAD Commit:** `26d196ddb973a24dec489bf3e2a902606691a7da` (`origin/main`)
-- **Current Branch:** `main` (tracking `origin/main`)
-- **Origin HEAD:** `26d196ddb973a24dec489bf3e2a902606691a7da` ("fix(whatsapp): root architecture overhaul for contextual intelligence and voice continuity")
-- **Local Uncommitted Changes:** 7 core production service files modified (+351 / -82 lines) + new E2E conversation test suite:
-  - `app/server/src/services/whatsappAgentService.js`: Canonical key alignment, pronoun guards, authoritative order query routing, debug telemetry.
-  - `app/server/src/services/conversationStateService.js`: Alias mapping, canonical storage key `${shopId}:${canonicalPhone}`, dual-store Redis/in-memory sync.
-  - `app/server/src/services/spokenResponsePlanner.js`: Removed hardcoded `#1643` fallback, complete checkout financial breakdown, Pakistani Urdu spoken formatting.
-  - `app/server/src/services/checkoutStateMachine.js`: Stripped conversational directory instructions from address capture.
-  - `app/server/src/services/orderResolver.js`: Case-insensitive multi-variant search, customer database lookups, 48-hour date window (`kal`).
-  - `app/server/src/services/responsePlanner.js`: Added `PRODUCT_DETAIL` / `ORDINAL_REFERENCE` cases, fixed `spokenText` property binding from `voicePlan`.
-  - `app/server/src/services/package-lock.json`: Dependency tree lock sync.
-  - `app/server/tests/zara-production-conversation.e2e.test.js`: Top-level WhatsApp production webhook E2E test suite (13/13 passing).
-  - `tests/zara-production-conversation.e2e.test.js`: Root test runner entry point.
+- **Current HEAD Commit:** `7997721` (`"feat(zara): implement response quality control, phonetic normalization, frustration handling, and 100+ Pakistani utterance test matrix"`)
+- **Previous Milestone Commit:** `9a733d5` (`"fix(zara): production forensic routing hardening, authoritative entity isolation, and E2E verification suite"`)
+- **Base Commit:** `26d196d` (`origin/main`)
+- **Current Branch:** `main` (ahead of `origin/main` by 2 logical milestone commits)
+- **Working Tree State:** Clean (0 unstaged changes, all changes committed)
 
 ---
 
-## 2. Production Failure Forensic Summary & Fixed Root Causes
-
-| Failure | Production Behavior | Root Cause | Implemented Forensic Fix |
-|---|---|---|---|
-| **A: Active Product Lost on Voice Pronoun** | "show me chair protection cover" -> Voice: "iski price kya hai" -> Zara returned *2 in 1 Bath Brush*. | Query cleaner reduced query to `"iski"`. Shopify returned 0 results. Empty reply triggered Gemini fallback, which searched catalog and returned default store item (*Bath Brush*), overwriting `activeProduct`. | Added `isPronounQuery` guard blocking catalog search on pronouns; bound `activeProduct` directly from canonical state; barred catalog search when pronoun refers to active entity. |
-| **B: Incomplete Voice Checkout Breakdown** | Voice: "please mera order confirm krdo" -> Zara asked only for address/city without establishing product or price. | `spokenResponsePlanner.js` only prompted for address/city and omitted item name, quantity, price, delivery, and total COD bill. | Structured voice confirmation to establish: product title, quantity 1 ("quantity ek"), price (Rs. 499), delivery (Rs. 199), total COD (Rs. 698), and explicit booking declaration. |
-| **C: Random "123" Resolved to #1643** | Customer: "123" -> Zara: *"Ji, order #1643 Magnetic Nasal Dilator..."* | `whatsappAgentService.js` unconditionally initialized `activeOrder = recentOrder;` at turn start (for test user this was #1643); `spokenResponsePlanner.js` hardcoded `'1643'` fallback. | `activeOrder` is initialized to `null`; "123" lookup strictly queries order number and clears active order if not found; eliminated all hardcoded `'1643'` fallbacks. |
-| **D: Directory Lookup Overridden by Catalog** | "mera name Ali hy aur address karachi hy apne directory main check karo mere details se jo order hy uska status btao" -> Returned *Bath Brush*. | Directory query captured into `extracted.address`; case-sensitive lookup on `payload` failed to match `"Ali"`. Fallback called catalog search. | Sanitized address regex against directory keywords; implemented case-insensitive multi-variant order & customer search; stripped catalog tools from Gemini on order queries. |
-
----
-
-## 3. Current Architecture
+## 2. Implemented Production Architecture & Hardening
 
 ```
 WhatsApp Inbound (Text / Voice Webhook)
@@ -44,25 +25,36 @@ WhatsApp Inbound (Text / Voice Webhook)
 PhoneNormalizer ──► Canonical Identity Key (${shopId}:${cleanPhone})
        │
        ▼
-ConversationStateService (Dual-Store Redis + In-Memory + DB Alias Mapping)
+ConversationStateService (Dual-Store Redis + In-Memory + DB Alias Mapping + Rejection Memory)
        │
        ▼
 ConversationContextResolver (Binds activeProduct, activeOrder, recentEntities)
        │
        ▼
-IntentResolver (Deterministic Intent Classification)
+IntentResolver (Deterministic Intent Classification + Phonetic Normalization)
        │
-       ├──► CASE A: Standalone Order Number Input (Exact match or Not Found)
-       ├──► CASE B: Customer Details / Order Lookup (Phone, Name, City, Product, Date)
+       ├──► CASE A: Standalone Order Number Input (Exact match or Not Found, never #1643)
+       ├──► CASE B: Customer Details / Order Lookup (Phone, Name, City, Product, Date, zero catalog leakage)
        ├──► CASE C: Cancellation / Rejection Lifecycle
-       ├──► CASE D/E: Confirmation Flow (New booking vs existing order)
-       ├──► CASE F: Checkout Data Collection (Name, Address, City)
-       ├──► CASE J: Product Details / Pronoun ("iski price" binds activeProduct)
+       ├──► CASE D/E: Confirmation Flow (New booking vs existing order with full breakdown)
+       ├──► CASE F: Checkout Data Collection (Guarded against non-checkout conversational intents)
+       ├──► CASE J: Product Details / Pronoun ("iski price" binds activeProduct, pronoun guarded)
        ├──► CASE K: Product Inquiry (Keyword catalog search on Shopify)
+       ├──► CASE L: Human Escalation / Owner Info / Bot Identity
+       ├──► CASE M: Social Closing / Frustration / Chit-chat / Curated Collections
        └──► Fallback: Guarded Gemini with Authoritative Tool Stripping
        │
        ▼
-ResponsePlanner & SpokenResponsePlanner (Natural Roman Urdu formatting, no URLs spoken)
+ResponsePlanner & SpokenResponsePlanner (Natural Pakistani Urdu spoken formatting)
+       │
+       ▼
+ResponseQualityControlService (Pre-Dispatch Truth & Quality Control Layer)
+       ├── 1. Order Status Integrity Guard (prohibits catalog leakage)
+       ├── 2. Order #123 Safeguard (blocks arbitrary order substitution)
+       ├── 3. Rejected Product Suppression (enforces rejection memory)
+       ├── 4. Financial Calculation Validation (price + delivery = total)
+       ├── 5. Sentence & Fact Deduplication
+       └── 6. Voice Safety (zero URLs in spoken output, natural currency)
        │
        ▼
 TextToSpeechService (OGG/Opus for WhatsApp) + WhatsAppClient Outbound Dispatch
@@ -73,44 +65,63 @@ ZARA_DEBUG_CONTEXT Observability & Interaction Logging
 
 ---
 
-## 4. Current Test Verification Status
+## 3. Production Failure Forensic Audit & Fix Verification
 
-- **E2E Production Webhook Suite (`zara-production-conversation.e2e.test.js`):** 13 / 13 PASSED (100%)
-  - Scenario 1 (Text -> Text Chair Cover): PASSED
-  - Scenario 2 (Text -> Voice Continuity): PASSED
-  - Scenario 2 (Voice -> Text Continuity): PASSED
-  - Scenario 2 (Voice -> Voice Continuity): PASSED
-  - Scenario 3 (Voice Checkout Complete Breakdown): PASSED
-  - Scenario 4 ("123" never resolves to #1643): PASSED
-  - Scenario 5 ("mera order kahan pohcha" executes order status, zero catalog search): PASSED
-  - Scenario 6 (Past order lookup by product & date "kal"): PASSED
-  - Scenario 7 (Directory lookup by Ali & Karachi checks orders, never calls catalog): PASSED
-  - Ambiguity (Multiple matching orders prompts clarification): PASSED
-  - Negation ("order confirm nahi karna" suppresses confirmation): PASSED
-  - Topic Interruption ("girlfriend naraz hai" retains active product): PASSED
-  - Unrelated Topic ("weather kaisa hai?" retains active product for link): PASSED
-- **Adversarial Regression Suite (`zara-god-level-context.test.js`):** 21 / 21 PASSED (100%)
-- **Total Automated Test Count:** 34 / 34 PASSED
+| Production Failure | Behavior Observed | Implemented Architectural Fix | Test Verification |
+|---|---|---|---|
+| **A: Active Product Lost on Voice Pronoun** | "show me chair protection cover" -> Voice: "iski price kya hai" -> Zara returned *2 in 1 Bath Brush*. | Added `isPronounQuery` guard blocking catalog search on pronouns; bound `activeProduct` directly from canonical state; barred catalog search when pronoun refers to active entity. | `zara-production-conversation.e2e.test.js` Scenario 2 (PASSED) |
+| **B: Incomplete Voice Checkout Breakdown** | Voice: "please mera order confirm krdo" -> Zara asked only for address/city without establishing product or price. | Structured voice confirmation establishing: product title, quantity 1, price (Rs. 499), delivery (Rs. 199), total COD (Rs. 698), and explicit booking prompt. | `zara-production-conversation.e2e.test.js` Scenario 3 (PASSED) |
+| **C: Random "123" Resolved to #1643** | Customer: "123" -> Zara: *"Ji, order #1643 Magnetic Nasal Dilator..."* | `activeOrder` initialized to `null`; "123" lookup strictly queries exact order number and returns not found; eliminated hardcoded `'1643'` fallbacks. | `zara-production-conversation.e2e.test.js` Scenario 4 (PASSED) |
+| **D: Directory Lookup Overridden by Catalog** | "mera name Ali hy aur address karachi hy apne directory main check karo mere details se jo order hy uska status btao" -> Returned *Bath Brush*. | Sanitized address regex against directory keywords; implemented case-insensitive multi-variant order & customer search; stripped catalog tools from Gemini on order queries. | `zara-production-conversation.e2e.test.js` Scenario 7 (PASSED) |
+| **E: Product Rejection Memory** | Customer rejects product ("nahi chahiye") -> Zara repeatedly re-recommended the same item in subsequent messages. | Implemented `recentlyRejectedProducts` memory in `ConversationStateService`; filtered out rejected items; enforced suppression via `ResponseQualityControlService`. | `zara-pakistani-customer-matrix.test.js` Group 9 [VOICE_QC_2] (PASSED) |
+| **F: Customer Frustration & Attitude** | Customer: "yr tumhara masla kya hai", "bekar bot ho" -> Zara pitched products or gave generic greeting. | Added `CUSTOMER_FRUSTRATION` intent in `IntentResolver` and courteous de-escalation offering live human support in `WhatsAppAgentService`. | `zara-pakistani-customer-matrix.test.js` Group 7 [CHAT_3 - CHAT_7] (PASSED) |
+| **G: Catalog Dump on Category Requests** | Customer: "cleaning products dikhao" -> Zara dumped raw products or generic response. | Implemented dynamic collection resolver via `ShopifyCatalogService.getCollections` returning clean, category-specific collection links (e.g. cleaning, kitchen). | `zara-pakistani-customer-matrix.test.js` Group 8 [COL_1 - COL_10] (PASSED) |
+| **H: URLs Spoken in Voice Output** | WhatsApp voice note spoke out raw HTTP URLs. | `ResponseQualityControlService` strips raw URLs and markdown links from spoken output; companion link sent as text. | `zara-pakistani-customer-matrix.test.js` Group 9 [VOICE_QC_1] (PASSED) |
 
 ---
 
-## 5. Remaining Limitations & Known Risks
+## 4. Complete Test Verification Matrix
 
-1. **Local vs Remote Sync:** Local fixes have been verified in working tree and soft-reset against `origin/main`. Git toolchain is now installed and ready to commit logical milestones.
-2. **Shopify Product Intelligence Beyond Title:** While titles and handles are matched, multi-variant options (colors, sizes, bundles) need first-class disambiguation when customer requests them.
-3. **Product Rejection Lifecycle Persistence:** When a customer rejects an item ("ye nahi chahiye"), the product must be added to `recentlyRejectedProducts` and strictly suppressed from automated catalog recommendations until explicitly re-requested.
-4. **Human Escalation State vs Flow:** Ensure escalation records notification state without silencing subsequent customer assistance.
-5. **Quality Control & Output Validation Layer:** A pre-dispatch validation barrier must verify every generated response before WhatsApp delivery to prevent hallucinations, duplicate facts, or ungrounded data.
+All 3 automated test suites are passing with 100% green status:
+
+```
+Test Files  3 passed (3)
+Tests       144 passed (144)
+```
+
+1. **`tests/zara-production-conversation.e2e.test.js` (13 / 13 PASSED)**
+   - E2E multi-turn conversation flow across Text and Voice
+   - Cross-modality pronoun persistence (`iski price`)
+   - Complete checkout financial breakdown
+   - Exact order number isolation (no #1643 fallback)
+   - Directory lookup without catalog leakage
+   - Date window resolution ("kal wala order")
+   - Negation safety ("confirm nahi karna")
+   - Interruption recovery ("girlfriend naraz hai")
+
+2. **`tests/zara-god-level-context.test.js` (21 / 21 PASSED)**
+   - Strict canonical phone-keying across multiple sessions
+   - In-memory & Redis state persistence
+   - Dual-store cache synchronization
+   - Complex multi-turn order dispute handling
+
+3. **`tests/zara-pakistani-customer-matrix.test.js` (110 / 110 PASSED)**
+   - Group 1: Product Discovery (15 Pakistani Utterances with typos, phonetics, slang)
+   - Group 2: Pronoun & Contextual Pricing (15 Utterances)
+   - Group 3: Order Lookup by Customer Details & Time (15 Utterances)
+   - Group 4: Exact Order Numbers & No #1643 Fallback (10 Utterances)
+   - Group 5: Checkout & Negation Safety (15 Utterances)
+   - Group 6: Human Escalation (10 Utterances)
+   - Group 7: Chitchat, Frustration & Small Talk (15 Utterances)
+   - Group 8: Multiple Products & Collections (10 Utterances)
+   - Group 9: Voice Spoken Output Quality Control (5 Utterances)
 
 ---
 
-## 6. Next Implementation Phases
+## 5. Production Readiness & Next Deployment Steps
 
-- **Phase 1 & 15:** Natural Language Intelligence & Normalizer (Slang, Roman Urdu typos, phonetic matching without brittle regexes).
-- **Phase 4 & 5:** Shopify Catalog Intelligence & Collections Shortlisting (Multi-product requests route to collections rather than overwhelming messages).
-- **Phase 6:** Product Rejection Memory (Strict suppression of rejected items from subsequent turns).
-- **Phase 7 & 10:** Human Escalation Robustness & Shopify Order Tag Mutations (`COD Confirmation Queued`, `AI Confirmed`).
-- **Phase 12, 13 & 14:** Voice Output Polish (OGG/Opus WhatsApp mobile compatibility, conversational brevity, companion text links).
-- **Phase 17 & 18:** Customer Frustration Handling & Pre-Dispatch Quality Control Gate.
-- **Phase 22 & 23:** Comprehensive 100-Utterance Pakistani Customer Test Matrix.
-- **Phase 28 & 29:** Production Safety, Secret Scan, Git Commit, and Remote Synchronization.
+1. **Automated Test Coverage:** Complete (144/144 tests passing).
+2. **Quality Control (QC):** Enforced before every WhatsApp outbound transmission.
+3. **Shopify Order Actions:** Tagging updated to include `COD_CONFIRMED`, `AI Confirmed`, `COD_CANCELLED`, `AI Cancel Requested`, `HUMAN_REVIEW_NEEDED`, `AI Escalated`.
+4. **Git Commits:** All changes staged and committed under clean git history (`7997721` & `9a733d5`).
+5. **Remote Push:** To sync to remote GitHub repository, authenticate git remote with personal access token or SSH credentials.
