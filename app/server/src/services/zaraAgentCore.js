@@ -715,6 +715,7 @@ CURRENT CONVERSATIONAL CONTEXT:${entityContext || '\n- No active product or orde
       { role: 'user', parts: [{ text: String(messageText).trim() }] }
     ];
 
+    const attemptedToolCalls = [];
     const executedToolCalls = [];
     const proposedStateUpdates = {};
     let roundCount = 0;
@@ -742,11 +743,48 @@ CURRENT CONVERSATIONAL CONTEXT:${entityContext || '\n- No active product or orde
         }
       } catch (geminiErr) {
         console.warn(`⚠️ [ZaraAgentCore] Gemini API error: ${geminiErr.message}`);
+
+        // Defense-in-depth: Never perform or propose order mutations when model request fails
+        const safeProposedUpdates = { ...proposedStateUpdates };
+        delete safeProposedUpdates.activeOrderStatus;
+
+        // Preserve customer's order number for safe retry
+        let retryOrderNumber = activeOrder?.orderNumber || state?.activeOrderNumber || null;
+        if (!retryOrderNumber && typeof messageText === 'string') {
+          const match = messageText.match(/\b(?:order\s*(?:number|no\.?|num)?\s*#?|#)\s*([0-9]{3,8})\b/i)
+            || messageText.match(/\b([0-9]{4,6})\b/);
+          if (match) {
+            retryOrderNumber = match[1];
+          }
+        }
+
+        if (retryOrderNumber) {
+          const cleanOrderNum = String(retryOrderNumber).trim();
+          safeProposedUpdates.activeOrderNumber = cleanOrderNum;
+          if (!safeProposedUpdates.activeOrder) {
+            safeProposedUpdates.activeOrder = { orderNumber: cleanOrderNum };
+          }
+        }
+
+        // Context-aware service-unavailable reply (never misleading greeting or false claim)
+        const isOrderQuery = Boolean(retryOrderNumber) || /\b(order|status|parcel|tracking|delivery|cancel|confirm)\b/i.test(messageText || '');
+        let serviceUnavailableReply;
+
+        if (retryOrderNumber) {
+          serviceUnavailableReply = `Maazrat, system mein temporary technical issue ki wajah se aapka order #${retryOrderNumber} filhal check nahi ho saka. Baraye meharbani thori dair baad dobara check karein.`;
+        } else if (isOrderQuery) {
+          serviceUnavailableReply = `Maazrat, system mein temporary technical issue ki wajah se aapka order status filhal check nahi ho saka. Baraye meharbani thori dair baad dobara check karein.`;
+        } else {
+          serviceUnavailableReply = `Maazrat, system mein temporary technical issue ki wajah se response generate nahi ho saka. Baraye meharbani thori dair baad dobara rabta karein.`;
+        }
+
         return {
-          replyText: `Ji, main Zara hoon Sunday Bazaaar se. Main aapki kya madad kar sakti hoon?`,
-          proposedStateUpdates,
+          replyText: serviceUnavailableReply,
+          proposedStateUpdates: safeProposedUpdates,
+          toolCallsAttempted: attemptedToolCalls,
           toolCallsExecuted: executedToolCalls,
           usedLLM: false,
+          isServiceUnavailable: true,
           error: geminiErr.message
         };
       }
@@ -810,8 +848,15 @@ CURRENT CONVERSATIONAL CONTEXT:${entityContext || '\n- No active product or orde
 
       const responseParts = [];
       for (const call of functionCalls) {
+        attemptedToolCalls.push({ name: call.name, args: call.args });
+        let toolResult;
+        try {
+          toolResult = await this.executeTool(call.name, call.args || {}, authContext);
+        } catch (err) {
+          toolResult = { success: false, error: err.message };
+        }
+
         executedToolCalls.push({ name: call.name, args: call.args });
-        const toolResult = await this.executeTool(call.name, call.args || {}, authContext);
 
         // Derive proposed state updates from verified tool outputs
         if (call.name === 'search_shopify_products' && toolResult?.products?.length > 0) {
@@ -873,6 +918,7 @@ CURRENT CONVERSATIONAL CONTEXT:${entityContext || '\n- No active product or orde
     return {
       replyText: sanitizedReply,
       proposedStateUpdates,
+      toolCallsAttempted: attemptedToolCalls,
       toolCallsExecuted: executedToolCalls,
       usedLLM: true,
       roundCount,

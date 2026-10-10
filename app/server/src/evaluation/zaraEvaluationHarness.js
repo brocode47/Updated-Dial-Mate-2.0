@@ -1229,6 +1229,11 @@ export class ZaraEvaluationHarness {
    * Evaluates deterministic expectations against final outputs and tool calls
    */
   evaluateExpectations(scenario, results) {
+    if (results.isApiError) {
+      // Upstream API failed (e.g. HTTP 429 DAILY_QUOTA_EXHAUSTED). Do not report false behavioral expectation failures.
+      return;
+    }
+
     const exp = scenario.expectations || {};
     const allOutbound = results.turns.map(t => t.outbound).join(' ');
     const allTools = results.turns.flatMap(t => t.toolCalls.map(tc => tc.name));

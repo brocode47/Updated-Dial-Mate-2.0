@@ -352,9 +352,9 @@ export class WhatsAppAgentService {
 
         if (coreResult && coreResult.replyText) {
           replyText = coreResult.replyText;
-          usedLLM = true;
-          executedAction = coreResult.toolCallsExecuted?.[0]?.name || 'zara_agent_core';
-          responseSource = 'zara_agent_core';
+          usedLLM = Boolean(coreResult.usedLLM);
+          executedAction = coreResult.toolCallsExecuted?.[0]?.name || (coreResult.isServiceUnavailable ? 'service_unavailable' : 'zara_agent_core');
+          responseSource = coreResult.usedLLM ? 'zara_agent_core' : 'service_unavailable';
 
           // Apply proposed state updates
           if (coreResult.proposedStateUpdates?.activeProduct) {

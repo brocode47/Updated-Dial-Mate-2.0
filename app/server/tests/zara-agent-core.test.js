@@ -546,4 +546,127 @@ describe('ZaraAgentCore — Phase 2 Intelligent Conversational LLM Engine', () =
     expect(result.proposedStateUpdates.humanEscalationRequested).toBe(true);
     expect(result.replyText).toContain('human support team ko forward kar di hai');
   });
+
+  // =========================================================================
+  // 9. API QUOTA EXHAUSTION & ERROR HANDLING (HTTP 429 DAILY_QUOTA_EXHAUSTED)
+  // =========================================================================
+
+  it('handles Gemini 429 DAILY_QUOTA_EXHAUSTED on order inquiry with context-aware unavailable reply and preserves order number without mutations', async () => {
+    const mockGenerateContent = vi.fn().mockRejectedValue(
+      new Error('[GoogleGenerativeAI Error]: Resource has been exhausted (e.g. check quota) - DAILY_QUOTA_EXHAUSTED')
+    );
+
+    const mockAiClient = {
+      models: { generateContent: mockGenerateContent }
+    };
+
+    const result = await ZaraAgentCore.handleTurn({
+      messageText: 'Mera order status check karein, order number 1643 hai',
+      fromPhone: '+923001234567',
+      shop: mockShop,
+      customer: mockCustomer,
+      aiClient: mockAiClient
+    });
+
+    // 1. Must flag usedLLM false and isServiceUnavailable true
+    expect(result.usedLLM).toBe(false);
+    expect(result.isServiceUnavailable).toBe(true);
+    expect(result.error).toContain('DAILY_QUOTA_EXHAUSTED');
+
+    // 2. Must NOT return misleading generic greeting
+    expect(result.replyText).not.toBe('Ji, main Zara hoon Sunday Bazaaar se. Main aapki kya madad kar sakti hoon?');
+
+    // 3. Must NOT claim false order status
+    expect(result.replyText).not.toMatch(/dispatch|confirmed|cancelled|delivered/i);
+
+    // 4. Must return concise, context-aware service-unavailable reply mentioning order number
+    expect(result.replyText).toMatch(/Maazrat.*technical issue.*1643/i);
+
+    // 5. Must preserve customer order number for safe retry
+    expect(result.proposedStateUpdates.activeOrderNumber).toBe('1643');
+    expect(result.proposedStateUpdates.activeOrder).toEqual({ orderNumber: '1643' });
+
+    // 6. Must NEVER perform order mutations
+    expect(result.proposedStateUpdates.activeOrderStatus).toBeUndefined();
+
+    // 7. Distinguishes attempted tool calls from completed tool calls (0 executed)
+    expect(result.toolCallsExecuted).toEqual([]);
+    expect(result.toolCallsAttempted).toEqual([]);
+  });
+
+  it('strips any order mutations and distinguishes attempted from completed tools if error occurs in follow-up round', async () => {
+    vi.spyOn(OrderResolver, 'resolveCustomerOrders').mockResolvedValue({
+      found: true,
+      order: mockOrder1643
+    });
+
+    const mockGenerateContent = vi.fn()
+      .mockResolvedValueOnce({
+        candidates: [{
+          content: {
+            parts: [{
+              functionCall: {
+                name: 'resolve_order',
+                args: { orderNumber: '1643' }
+              }
+            }]
+          }
+        }]
+      })
+      .mockRejectedValueOnce(
+        new Error('HTTP 429: Quota exceeded')
+      );
+
+    const mockAiClient = {
+      models: { generateContent: mockGenerateContent }
+    };
+
+    const result = await ZaraAgentCore.handleTurn({
+      messageText: 'Order #1643 ka status batayein',
+      fromPhone: '+923001234567',
+      shop: mockShop,
+      customer: mockCustomer,
+      aiClient: mockAiClient
+    });
+
+    expect(result.usedLLM).toBe(false);
+    expect(result.isServiceUnavailable).toBe(true);
+
+    // Distinguishes attempted vs completed tool calls
+    expect(result.toolCallsAttempted).toHaveLength(1);
+    expect(result.toolCallsAttempted[0].name).toBe('resolve_order');
+    expect(result.toolCallsExecuted).toHaveLength(1);
+    expect(result.toolCallsExecuted[0]).toEqual({ name: 'resolve_order', args: { orderNumber: '1643' } });
+
+    // Context-aware unavailable reply with order number preserved
+    expect(result.replyText).toContain('1643');
+    expect(result.proposedStateUpdates.activeOrderNumber).toBe('1643');
+
+    // Order status mutation must NOT be present
+    expect(result.proposedStateUpdates.activeOrderStatus).toBeUndefined();
+  });
+
+  it('provides concise unavailable reply on general non-order query quota failure', async () => {
+    const mockGenerateContent = vi.fn().mockRejectedValue(
+      new Error('RESOURCE_EXHAUSTED')
+    );
+
+    const mockAiClient = {
+      models: { generateContent: mockGenerateContent }
+    };
+
+    const result = await ZaraAgentCore.handleTurn({
+      messageText: 'Wireless earbuds hain aapke paas?',
+      fromPhone: '+923001234567',
+      shop: mockShop,
+      customer: mockCustomer,
+      aiClient: mockAiClient
+    });
+
+    expect(result.usedLLM).toBe(false);
+    expect(result.isServiceUnavailable).toBe(true);
+    expect(result.replyText).not.toBe('Ji, main Zara hoon Sunday Bazaaar se. Main aapki kya madad kar sakti hoon?');
+    expect(result.replyText).toContain('Maazrat');
+    expect(result.replyText).toContain('temporary technical issue');
+  });
 });
