@@ -12,6 +12,7 @@
     "eval:gemini": "node scripts/runZaraEvaluation.js",
     "eval:mock": "node scripts/runZaraEvaluation.js --mock",
     "eval:live-three": "node scripts/runThreeLiveScenarios.js",
+    "eval:order": "node scripts/runOrderScenario.js",
     "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {
