@@ -139,6 +139,17 @@ export class ResponseQualityControlService {
       }
     }
 
+    // 4c. UNSOLICITED PRODUCT INSERTION GUARD: Never promote products on greetings or casual messages
+    const isGreetingOrCasual = ['SOCIAL_CASUAL', 'SOCIAL_FRIENDSHIP', 'SOCIAL_ACK', 'SOCIAL_CLOSING'].includes(intent) ||
+      (intent === 'GENERAL_QUERY' && /\b(hello|hi|hey|assalam|salam)\b/i.test(userMessage));
+    if (isGreetingOrCasual) {
+      if ((replyText.includes('Rs.') || replyText.includes('🔗') || /price|delivery charges/i.test(replyText)) && !/\b(product|price|order|item|buy|kharid)\b/i.test(userMessage)) {
+        issues.push('Unsolicited product insertion detected during casual/greeting message');
+        replyText = `Assalam-o-Alaikum! Sunday Bazaaar Official mein khush-amdeed. Main Zara hoon, batayein main aapki kya madad kar sakti hoon?`;
+        repaired = true;
+      }
+    }
+
     // 5. DUPLICATE FACT & SENTENCE CLEANING
     replyText = this.deduplicateSentences(replyText);
 

@@ -18,6 +18,7 @@ import { CheckoutStateMachine, CheckoutStep } from './checkoutStateMachine.js';
 import { IntentResolver } from './intentResolver.js';
 import { ResponsePlanner } from './responsePlanner.js';
 import { ResponseQualityControlService } from './responseQualityControlService.js';
+import { ConversationBrain, ActiveEntityType } from './conversationBrain.js';
 
 /**
  * WhatsApp AI Customer Agent Service ("Zara 2.0")
@@ -261,13 +262,28 @@ export class WhatsAppAgentService {
       activeOrder
     };
 
-    // 8. Context & Pronoun Reference Resolution
-    const ref = ConversationContextResolver.resolveReference(messageText, contextSnapshot, { orders });
-    if (ref.entityType === ResolvedEntityType.PRODUCT && ref.entity) {
-      activeProduct = ref.entity;
-    } else if (ref.entityType === ResolvedEntityType.ORDER && ref.entity) {
-      activeOrder = ref.entity;
+    // 8. Foundational Conversation Brain Analysis & Semantic Resolution
+    const brainTurn = ConversationBrain.analyzeTurn({
+      messageText,
+      state: contextSnapshot,
+      customer,
+      orders
+    });
+
+    if (brainTurn.entityResolution?.entityType === ActiveEntityType.PRODUCT && brainTurn.entityResolution?.entity) {
+      activeProduct = brainTurn.entityResolution.entity;
+    } else if (brainTurn.entityResolution?.entityType === ActiveEntityType.ORDER && brainTurn.entityResolution?.entity) {
+      activeOrder = brainTurn.entityResolution.entity;
     }
+
+    const ref = {
+      entityType: brainTurn.entityResolution?.entityType || ResolvedEntityType.NONE,
+      entity: brainTurn.entityResolution?.entity || (brainTurn.entityResolution?.entityType === ActiveEntityType.PRODUCT ? activeProduct : activeOrder),
+      isAmbiguous: Boolean(brainTurn.entityResolution?.isAmbiguous),
+      candidates: brainTurn.entityResolution?.candidates || [],
+      clarificationPrompt: brainTurn.entityResolution?.clarificationPrompt || null,
+      strategy: brainTurn.discourse?.strategy || 'brain'
+    };
 
     const candidateProduct = activeProduct || (await ConversationStateService.resolveProductReference(conversationKey, messageText));
     const contextBefore = ConversationContextResolver.buildContextObject(state, ref, customer);
@@ -712,7 +728,7 @@ export class WhatsAppAgentService {
         let prod = ref.entity || activeProduct || candidateProduct;
         if (!prod) {
           const cleanQuery = messageText
-            .replace(/\b(mera|meri|mere|ka|ki|ke|price|rate|delivery|charges|charges\?|batao|btao|bhi|kitne|hai|hain)\b/gi, '')
+            .replace(/\b(mera|meri|mere|ka|ki|ke|price|rate|delivery|charges|charges\?|dc\??|dc|shipping|fee|cost|ghar\s*tak|batao|btao|bhi|kitne|kitna|kitny|hai|hain|kya)\b/gi, '')
             .trim();
           if (cleanQuery) {
             const searchRes = await ShopifyCatalogService.searchProducts(shop.domain, cleanQuery, { limit: 5 });
@@ -1003,6 +1019,10 @@ export class WhatsAppAgentService {
         const list = filtered.map((p, idx) => `${idx + 1}. *${p.title}* — ${p.formattedPrice}\n🔗 ${p.url}`).join('\n\n');
         replyText = `Yeh mazeed products hain:\n\n${list}\n\nMukammal collection dekhne ke liye:\n🔗 https://sundaybazaaar.store/collections/all-products`;
       }
+    } else if (detected.intent === 'GENERAL_QUERY' && /\b(hello|hi|hey|assalam\s*o\s*alaikum|salam|aaoa)\b/i.test(messageText)) {
+      executedAction = 'general_greeting';
+      const nameGreeting = customer?.firstName ? ` ${customer.firstName}` : '';
+      replyText = `Assalam-o-Alaikum${nameGreeting}! Sunday Bazaaar Official mein khush-amdeed. Main Zara hoon, batayein main aapki kya madad kar sakti hoon?`;
     }
 
     // =========================================================================

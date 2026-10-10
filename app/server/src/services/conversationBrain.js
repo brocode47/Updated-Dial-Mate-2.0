@@ -417,17 +417,17 @@ export class SemanticContextResolver {
       }
     }
 
-    // 4. Pronouns & Elliptical Continuation for Active Product
+    // 4. Order continuation / Pronouns referring to active order
+    if (discourse.targetEntityType === ActiveEntityType.ORDER && activeOrd) {
+      return makeRes(ActiveEntityType.ORDER, activeOrd, false, [activeOrd]);
+    }
+
+    // 5. Pronouns & Elliptical Continuation for Active Product
     const isProductContinuation = discourse.targetEntityType === ActiveEntityType.PRODUCT ||
       Boolean(activeProd && (normalization.ellipticalType || normalization.hasPronoun || discourse.isContinuation));
 
     if (isProductContinuation && activeProd) {
       return makeRes(ActiveEntityType.PRODUCT, activeProd, false, [activeProd]);
-    }
-
-    // 5. Fallback to Active Order if Order continuation
-    if (discourse.targetEntityType === ActiveEntityType.ORDER && activeOrd) {
-      return makeRes(ActiveEntityType.ORDER, activeOrd, false, [activeOrd]);
     }
 
     // 6. Ambiguity Resolution: Multiple Products recently discussed and customer says "iska batao" or "link?"
