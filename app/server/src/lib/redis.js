@@ -11,21 +11,27 @@ if (!isInsideDocker && process.env.NODE_ENV !== 'production' && REDIS_URL.includ
 // Singleton Redis connection for general app use
 export const redis = new Redis(REDIS_URL, {
   maxRetriesPerRequest: null, // Required by BullMQ
-  enableReadyCheck: false
+  enableReadyCheck: false,
+  lazyConnect: true
 });
 
 // A separate connection is often recommended for BullMQ workers vs queue management
 export const connection = new Redis(REDIS_URL, {
   maxRetriesPerRequest: null,
-  enableReadyCheck: false
+  enableReadyCheck: false,
+  lazyConnect: true
 });
 
 redis.on('error', (err) => {
-  console.warn('⚠️ Redis Connection Error:', err.message);
+  if (process.env.NODE_ENV !== 'test' && !process.env.IS_EVAL_HARNESS) {
+    console.warn('⚠️ Redis Connection Error:', err.message);
+  }
 });
 
 connection.on('error', (err) => {
-  console.warn('⚠️ BullMQ Redis Error:', err.message);
+  if (process.env.NODE_ENV !== 'test' && !process.env.IS_EVAL_HARNESS) {
+    console.warn('⚠️ BullMQ Redis Error:', err.message);
+  }
 });
 
 redis.on('ready', () => {

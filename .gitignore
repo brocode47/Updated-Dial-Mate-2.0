@@ -30,3 +30,5 @@ app/**/.devin/
 *.sqlite-wal
 /dist/
 /server/
+.eval_checkpoint*.json
+app/server/.eval_checkpoint*.json

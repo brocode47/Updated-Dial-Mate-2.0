@@ -19,6 +19,8 @@
  * 6. Objective Scorecard: Evaluates 30+ varied scenarios across 10 distinct categories.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { ZaraAgentCore, ZARA_TOOL_DEFINITIONS } from '../services/zaraAgentCore.js';
 import { SpokenResponsePlanner } from '../services/spokenResponsePlanner.js';
 
@@ -970,12 +972,121 @@ export const HELD_OUT_SCENARIOS = [
 ];
 
 // ============================================================================
+// 3.5. THROTTLED REAL GEMINI CLIENT (CENTRALIZED RATE LIMIT & QUOTA PROTECTION)
+// ============================================================================
+
+export class ThrottledAIClient {
+  constructor(options = {}) {
+    this.rawClient = options.rawClient;
+    this.requestsPerMinute = options.requestsPerMinute || parseInt(process.env.EVAL_REQUESTS_PER_MINUTE || '4', 10);
+    this.minIntervalMs = Math.ceil(60000 / this.requestsPerMinute);
+    this.lastRequestTimestamp = 0;
+    this.totalRequestsConsumed = 0;
+    this.queue = Promise.resolve();
+    this.isDailyQuotaExhausted = false;
+    this.onProgress = options.onProgress || null;
+  }
+
+  async _throttle() {
+    const now = Date.now();
+    const elapsed = now - this.lastRequestTimestamp;
+    if (elapsed < this.minIntervalMs) {
+      const waitMs = this.minIntervalMs - elapsed;
+      if (typeof this.onProgress === 'function') {
+        this.onProgress({ type: 'rate_limit_wait', waitMs, intervalMs: this.minIntervalMs });
+      }
+      await new Promise(res => setTimeout(res, waitMs));
+    }
+    this.lastRequestTimestamp = Date.now();
+  }
+
+  get models() {
+    return {
+      generateContent: async (params) => {
+        if (this.isDailyQuotaExhausted) {
+          throw new Error('DAILY_QUOTA_EXHAUSTED: Daily Gemini API quota has been completely exhausted.');
+        }
+
+        // Sequential queue to guarantee strictly one active request at a time
+        return (this.queue = this.queue.then(async () => {
+          let attempts = 0;
+          const maxRetries = 3;
+
+          while (attempts <= maxRetries) {
+            attempts++;
+            await this._throttle();
+
+            try {
+              this.totalRequestsConsumed++;
+              return await this.rawClient.models.generateContent(params);
+            } catch (err) {
+              const errMsg = String(err.message || '');
+              const errStr = JSON.stringify(err);
+
+              const is429 = errMsg.includes('429') ||
+                            errMsg.includes('RESOURCE_EXHAUSTED') ||
+                            errMsg.includes('Quota exceeded') ||
+                            errStr.includes('RESOURCE_EXHAUSTED') ||
+                            errStr.includes('429');
+
+              if (!is429) {
+                throw err;
+              }
+
+              // Check if it's daily quota exhaustion vs per-minute
+              const isDaily = /per\s*day|daily|quota\s*limit\s*0/i.test(errMsg) || /per\s*day|daily/i.test(errStr);
+              if (isDaily) {
+                this.isDailyQuotaExhausted = true;
+                throw new Error(`DAILY_QUOTA_EXHAUSTED: ${errMsg}`);
+              }
+
+              // Parse retry delay from error metadata or headers if present
+              let retryDelayMs = null;
+              const delayMatch = errMsg.match(/retry(?:ing)?\s+after\s+(\d+(?:\.\d+)?)\s*s/i) ||
+                                 errStr.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/i);
+              if (delayMatch && delayMatch[1]) {
+                const s = parseFloat(delayMatch[1]);
+                if (s > 0 && s < 120) {
+                  retryDelayMs = Math.ceil(s * 1000) + 1500;
+                }
+              }
+
+              if (!retryDelayMs) {
+                // Exponential backoff: 15s, 30s, 60s + jitter
+                retryDelayMs = Math.min(65000, 15000 * Math.pow(2, attempts - 1)) + Math.floor(Math.random() * 2000);
+              }
+
+              if (typeof this.onProgress === 'function') {
+                this.onProgress({
+                  type: 'quota_backoff',
+                  attempt: attempts,
+                  maxRetries,
+                  waitMs: retryDelayMs,
+                  message: errMsg
+                });
+              }
+
+              if (attempts > maxRetries) {
+                throw new Error(`RATE_LIMIT_EXHAUSTED: Rate limit 429 persisted after ${maxRetries} retries (${errMsg})`);
+              }
+
+              await new Promise(r => setTimeout(r, retryDelayMs));
+              this.lastRequestTimestamp = Date.now();
+            }
+          }
+        }));
+      }
+    };
+  }
+}
+
+// ============================================================================
 // 4. EVALUATION HARNESS ENGINE
 // ============================================================================
 
 export class ZaraEvaluationHarness {
   constructor(options = {}) {
-    this.modelName = options.modelName || process.env.EVAL_GEMINI_MODEL || 'gemini-2.5-flash';
+    this.modelName = options.modelName || process.env.EVAL_GEMINI_MODEL || 'gemini-3.8-flash';
     this.apiKey = options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.GOOGLE_API_KEY || null;
     this.isRealModel = Boolean(this.apiKey);
     if (this.apiKey && !process.env.GEMINI_API_KEY) {
@@ -983,6 +1094,44 @@ export class ZaraEvaluationHarness {
     }
     this.toolRunner = new EvalToolRunner();
     this.mockAIClient = new EvalMockAIClient(this.toolRunner);
+    this.throttledAIClient = null;
+    this.requestsPerMinute = options.requestsPerMinute || parseInt(process.env.EVAL_REQUESTS_PER_MINUTE || '4', 10);
+    this.onProgress = options.onProgress || null;
+  }
+
+  async getAIClientForEval() {
+    if (!this.isRealModel) {
+      return this.mockAIClient;
+    }
+    if (!this.throttledAIClient) {
+      const { getAIClient } = await import('../integrations/ai/client.js');
+      const raw = getAIClient();
+      this.throttledAIClient = new ThrottledAIClient({
+        rawClient: raw,
+        requestsPerMinute: this.requestsPerMinute,
+        onProgress: this.onProgress
+      });
+    }
+    return this.throttledAIClient;
+  }
+
+  /**
+   * Lightweight pre-flight connectivity probe to test model availability and credentials
+   */
+  async verifyModelAccess() {
+    if (!this.apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured in process environment.');
+    }
+    const client = await this.getAIClientForEval();
+    const probe = await client.models.generateContent({
+      model: this.modelName,
+      contents: 'Respond with OK.'
+    });
+    return {
+      success: true,
+      model: this.modelName,
+      response: (probe?.text || '').trim()
+    };
   }
 
   /**
@@ -1013,6 +1162,7 @@ export class ZaraEvaluationHarness {
       const customerPhone = scenario.customerPhone;
 
       try {
+        const aiClient = await this.getAIClientForEval();
         const coreRes = await ZaraAgentCore.handleTurn({
           messageText: turnInput.text,
           fromPhone: customerPhone,
@@ -1020,14 +1170,16 @@ export class ZaraEvaluationHarness {
           customer: { phone: customerPhone, firstName: customerPhone === '+923001234567' ? 'Muhammad Ali' : 'Customer' },
           state: { activeProduct, activeOrder, rejectedProducts },
           turns: conversationTurns,
-          aiClient: this.isRealModel ? null : this.mockAIClient,
+          aiClient,
           toolRunner: this.toolRunner,
           model: this.modelName
         });
 
         if (this.isRealModel && coreRes.usedLLM === false) {
           results.passed = false;
-          results.reason.push(`Real Gemini model call failed (fallback: ${coreRes.error || 'usedLLM false'})`);
+          results.isApiError = true;
+          results.apiError = coreRes.error || 'usedLLM false';
+          results.reason.push(`Real Gemini API error: ${coreRes.error || 'usedLLM false'}`);
         }
 
         const replyText = coreRes.replyText;
@@ -1161,33 +1313,119 @@ export class ZaraEvaluationHarness {
   }
 
   /**
-   * Executes all 31 scenarios and produces an objective scorecard
+   * Executes scenarios with checkpoint persistence and rate-limit interruption handling
    */
-  async runSuite() {
-    const scenarioResults = [];
-    for (const sc of HELD_OUT_SCENARIOS) {
-      const res = await this.runScenario(sc);
-      scenarioResults.push(res);
+  async runSuite(options = {}) {
+    const checkpointFile = options.checkpointFile || process.env.EVAL_CHECKPOINT_FILE || path.resolve(process.cwd(), '.eval_checkpoint.json');
+    const resume = options.resume !== false;
+
+    let checkpoint = {
+      model: this.modelName,
+      evaluationMode: this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL',
+      updatedAt: new Date().toISOString(),
+      completedScenarios: {},
+      totalRequestsConsumed: 0
+    };
+
+    if (resume && fs.existsSync(checkpointFile)) {
+      try {
+        const raw = fs.readFileSync(checkpointFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.completedScenarios === 'object') {
+          checkpoint = parsed;
+        }
+      } catch (_) {}
     }
 
+    const scenarioResults = [];
+    let quotaInterrupted = false;
+    let quotaErrorDetails = null;
+
+    for (const sc of HELD_OUT_SCENARIOS) {
+      if (quotaInterrupted) {
+        break;
+      }
+
+      // Check if already completed and NOT an API error
+      const cached = checkpoint.completedScenarios[sc.id];
+      if (resume && cached && !cached.isApiError) {
+        scenarioResults.push(cached);
+        if (typeof this.onProgress === 'function') {
+          this.onProgress({ type: 'scenario_resumed', scenarioId: sc.id, passed: cached.passed });
+        }
+        continue;
+      }
+
+      const res = await this.runScenario(sc);
+      scenarioResults.push(res);
+
+      if (res.isApiError) {
+        const isQuota = /429|RESOURCE_EXHAUSTED|RATE_LIMIT|DAILY_QUOTA/i.test(res.apiError || '');
+        if (isQuota || this.throttledAIClient?.isDailyQuotaExhausted) {
+          quotaInterrupted = true;
+          quotaErrorDetails = res.apiError;
+          if (typeof this.onProgress === 'function') {
+            this.onProgress({
+              type: 'quota_interrupted',
+              scenarioId: sc.id,
+              error: res.apiError,
+              isDaily: Boolean(this.throttledAIClient?.isDailyQuotaExhausted)
+            });
+          }
+        }
+      } else {
+        // Save into checkpoint only if it did NOT fail due to an API error
+        checkpoint.completedScenarios[sc.id] = {
+          scenarioId: res.scenarioId,
+          category: res.category,
+          executionMode: res.executionMode,
+          modelUsed: res.modelUsed,
+          turns: res.turns,
+          checks: res.checks,
+          passed: res.passed,
+          reason: res.reason,
+          latencyMs: res.latencyMs,
+          totalTokens: res.totalTokens
+        };
+        checkpoint.updatedAt = new Date().toISOString();
+        checkpoint.totalRequestsConsumed = (checkpoint.totalRequestsConsumed || 0) + 1;
+
+        try {
+          fs.writeFileSync(checkpointFile, JSON.stringify(checkpoint, null, 2), 'utf8');
+        } catch (_) {}
+      }
+    }
+
+    const totalCount = HELD_OUT_SCENARIOS.length;
+    const completedCount = scenarioResults.filter(r => !r.isApiError).length;
     const passedCount = scenarioResults.filter(r => r.passed).length;
-    const totalCount = scenarioResults.length;
-    const passRate = Math.round((passedCount / totalCount) * 100);
-    const avgLatency = Math.round(scenarioResults.reduce((sum, r) => sum + r.latencyMs, 0) / totalCount);
+    const behavioralFailures = scenarioResults.filter(r => !r.passed && !r.isApiError).length;
+    const apiFailures = scenarioResults.filter(r => r.isApiError).length;
+    const passRate = completedCount > 0 ? Math.round((passedCount / completedCount) * 100) : 0;
+    const avgLatency = scenarioResults.length > 0 ? Math.round(scenarioResults.reduce((sum, r) => sum + (r.latencyMs || 0), 0) / scenarioResults.length) : 0;
     const totalTokensUsed = scenarioResults.reduce((sum, r) => sum + (r.totalTokens || 0), 0);
+    const requestsConsumed = this.throttledAIClient?.totalRequestsConsumed || 0;
 
     return {
       timestamp: new Date().toISOString(),
       evaluationMode: this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL',
       modelTested: this.isRealModel ? this.modelName : 'N/A (MOCK_PROTOCOL_HARNESS)',
       apiKeyProvided: this.isRealModel,
+      checkpointFile,
+      quotaInterrupted,
+      quotaErrorDetails,
       metrics: {
         totalScenarios: totalCount,
+        completedScenarios: completedCount,
         passedScenarios: passedCount,
         failedScenarios: totalCount - passedCount,
+        behavioralFailures,
+        apiFailures,
         passRatePercent: passRate,
         averageLatencyMs: avgLatency,
-        totalTokensUsed
+        totalTokensUsed,
+        requestsConsumed,
+        requestsAllowedPerMinute: this.requestsPerMinute
       },
       results: scenarioResults
     };

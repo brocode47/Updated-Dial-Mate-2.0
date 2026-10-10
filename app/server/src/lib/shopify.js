@@ -1,6 +1,8 @@
-console.log('🔎 SHOPIFY_API_KEY exists:', !!process.env.SHOPIFY_API_KEY);
-console.log('🔎 SHOPIFY_API_SECRET exists:', !!process.env.SHOPIFY_API_SECRET);
-console.log('🔎 APP_URL:', process.env.APP_URL);
+if (process.env.NODE_ENV !== 'test' && !process.env.IS_EVAL_HARNESS) {
+  console.log('🔎 SHOPIFY_API_KEY exists:', !!process.env.SHOPIFY_API_KEY);
+  console.log('🔎 SHOPIFY_API_SECRET exists:', !!process.env.SHOPIFY_API_SECRET);
+  console.log('🔎 APP_URL:', process.env.APP_URL);
+}
 
 import '@shopify/shopify-api/adapters/node';
 /* __imports_rewritten__ */
@@ -16,7 +18,11 @@ export const shopify = shopifyApi({
   apiVersion,
   isEmbeddedApp: false,
   logger: {
-    log: (_severity, message) => console.log(message)
+    log: (_severity, message) => {
+      if (process.env.NODE_ENV !== 'test' && !process.env.IS_EVAL_HARNESS) {
+        console.log(message);
+      }
+    }
   }
 });
 
