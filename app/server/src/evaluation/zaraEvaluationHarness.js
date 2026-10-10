@@ -1144,7 +1144,11 @@ export class ZaraEvaluationHarness {
       category: scenario.category,
       executionMode: this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL',
       modelUsed: this.isRealModel ? this.modelName : 'MockGenAIAdapter (Dynamic)',
+      evaluatorVersion: 'v2.0',
+      scenarioVersion: 'v1.0',
+      timestamp: new Date().toISOString(),
       turns: [],
+      toolDecisions: [],
       checks: {},
       passed: true,
       reason: [],
@@ -1216,6 +1220,7 @@ export class ZaraEvaluationHarness {
 
     results.latencyMs = Date.now() - startTime;
     results.totalTokens = results.turns.reduce((sum, t) => sum + (t.tokens || 0), 0);
+    results.toolDecisions = results.turns.flatMap(t => (t.toolCalls || []).map(tc => ({ name: tc.name, args: tc.args })));
     this.evaluateExpectations(scenario, results);
     return results;
   }
@@ -1248,7 +1253,8 @@ export class ZaraEvaluationHarness {
     }
 
     if (exp.mustQuoteAuthoritativePrice) {
-      const hasPrice = allOutbound.includes(String(exp.mustQuoteAuthoritativePrice)) || allOutbound.includes('1,499') || allOutbound.includes('1499');
+      const cleanPrice = String(exp.mustQuoteAuthoritativePrice).replace(/,/g, '');
+      const hasPrice = allOutbound.includes(String(exp.mustQuoteAuthoritativePrice)) || allOutbound.includes(cleanPrice);
       results.checks.quotedAccuratePrice = hasPrice;
       if (!hasPrice) {
         results.passed = false;
@@ -1257,7 +1263,8 @@ export class ZaraEvaluationHarness {
     }
 
     if (exp.mustCalculateTotal) {
-      const hasTotal = allOutbound.includes(String(exp.mustCalculateTotal)) || allOutbound.includes('2,698') || allOutbound.includes('2698');
+      const cleanTotal = String(exp.mustCalculateTotal).replace(/,/g, '');
+      const hasTotal = allOutbound.includes(String(exp.mustCalculateTotal)) || allOutbound.includes(cleanTotal);
       results.checks.calculatedAccurateTotal = hasTotal;
       if (!hasTotal) {
         results.passed = false;
@@ -1316,11 +1323,17 @@ export class ZaraEvaluationHarness {
    * Executes scenarios with checkpoint persistence and rate-limit interruption handling
    */
   async runSuite(options = {}) {
-    const checkpointFile = options.checkpointFile || process.env.EVAL_CHECKPOINT_FILE || path.resolve(process.cwd(), '.eval_checkpoint.json');
+    const EVALUATOR_VERSION = 'v2.0';
+    const SCENARIO_VERSION = 'v1.0';
+    const modeKey = this.isRealModel ? `real_${this.modelName.replace(/[^a-zA-Z0-9_-]/g, '_')}` : 'mock_protocol';
+    const defaultFile = path.resolve(process.cwd(), `.eval_checkpoint.${modeKey}.json`);
+    const checkpointFile = options.checkpointFile || process.env.EVAL_CHECKPOINT_FILE || defaultFile;
     const resume = options.resume !== false;
 
     let checkpoint = {
-      model: this.modelName,
+      evaluatorVersion: EVALUATOR_VERSION,
+      scenarioVersion: SCENARIO_VERSION,
+      modelTested: this.isRealModel ? this.modelName : 'MockGenAIAdapter (Dynamic)',
       evaluationMode: this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL',
       updatedAt: new Date().toISOString(),
       completedScenarios: {},
@@ -1331,8 +1344,28 @@ export class ZaraEvaluationHarness {
       try {
         const raw = fs.readFileSync(checkpointFile, 'utf8');
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.completedScenarios === 'object') {
-          checkpoint = parsed;
+        const modeMatch = parsed.evaluationMode === (this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL');
+        const modelMatch = !this.isRealModel || parsed.modelTested === this.modelName;
+        const versionMatch = parsed.evaluatorVersion === EVALUATOR_VERSION && parsed.scenarioVersion === SCENARIO_VERSION;
+
+        if (modeMatch && modelMatch && versionMatch && typeof parsed.completedScenarios === 'object') {
+          const validScenarios = {};
+          for (const [id, sc] of Object.entries(parsed.completedScenarios)) {
+            const entryModeMatch = sc.executionMode === (this.isRealModel ? 'REAL_GEMINI' : 'MOCK_PROTOCOL');
+            const entryModelMatch = !this.isRealModel || sc.modelUsed === this.modelName;
+            const hasProvenance = sc.evaluatorVersion === EVALUATOR_VERSION && sc.scenarioVersion === SCENARIO_VERSION && Boolean(sc.timestamp);
+            const hasEvidence = Array.isArray(sc.turns) && sc.turns.length > 0 && (!this.isRealModel || (sc.totalTokens > 0 || Array.isArray(sc.toolDecisions)));
+
+            if (entryModeMatch && entryModelMatch && hasProvenance && hasEvidence && !sc.isApiError) {
+              validScenarios[id] = sc;
+            } else if (typeof this.onProgress === 'function') {
+              this.onProgress({ type: 'checkpoint_entry_rejected', scenarioId: id, reason: 'Unverifiable provenance or mode mismatch' });
+            }
+          }
+          checkpoint.completedScenarios = validScenarios;
+          checkpoint.totalRequestsConsumed = parsed.totalRequestsConsumed || 0;
+        } else if (typeof this.onProgress === 'function') {
+          this.onProgress({ type: 'checkpoint_rejected', file: checkpointFile, reason: 'Header mode/model/version mismatch' });
         }
       } catch (_) {}
     }
@@ -1346,7 +1379,7 @@ export class ZaraEvaluationHarness {
         break;
       }
 
-      // Check if already completed and NOT an API error
+      // Check if already completed and verified valid
       const cached = checkpoint.completedScenarios[sc.id];
       if (resume && cached && !cached.isApiError) {
         scenarioResults.push(cached);
@@ -1374,13 +1407,17 @@ export class ZaraEvaluationHarness {
           }
         }
       } else {
-        // Save into checkpoint only if it did NOT fail due to an API error
+        // Save into checkpoint only with verified metadata
         checkpoint.completedScenarios[sc.id] = {
           scenarioId: res.scenarioId,
           category: res.category,
           executionMode: res.executionMode,
           modelUsed: res.modelUsed,
+          evaluatorVersion: EVALUATOR_VERSION,
+          scenarioVersion: SCENARIO_VERSION,
+          timestamp: res.timestamp,
           turns: res.turns,
+          toolDecisions: res.toolDecisions,
           checks: res.checks,
           passed: res.passed,
           reason: res.reason,
