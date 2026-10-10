@@ -9,6 +9,8 @@
     "start": "node src/index.js",
     "worker": "node src/workers/index.js",
     "test": "vitest run",
+    "eval:gemini": "node scripts/runZaraEvaluation.js",
+    "eval:mock": "node scripts/runZaraEvaluation.js --mock",
     "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {

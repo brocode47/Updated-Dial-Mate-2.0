@@ -978,6 +978,9 @@ export class ZaraEvaluationHarness {
     this.modelName = options.modelName || process.env.EVAL_GEMINI_MODEL || 'gemini-2.5-flash';
     this.apiKey = options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.GOOGLE_API_KEY || null;
     this.isRealModel = Boolean(this.apiKey);
+    if (this.apiKey && !process.env.GEMINI_API_KEY) {
+      process.env.GEMINI_API_KEY = this.apiKey;
+    }
     this.toolRunner = new EvalToolRunner();
     this.mockAIClient = new EvalMockAIClient(this.toolRunner);
   }
@@ -1021,6 +1024,11 @@ export class ZaraEvaluationHarness {
           toolRunner: this.toolRunner,
           model: this.modelName
         });
+
+        if (this.isRealModel && coreRes.usedLLM === false) {
+          results.passed = false;
+          results.reason.push(`Real Gemini model call failed (fallback: ${coreRes.error || 'usedLLM false'})`);
+        }
 
         const replyText = coreRes.replyText;
         const toolCalls = coreRes.toolCallsExecuted || [];
