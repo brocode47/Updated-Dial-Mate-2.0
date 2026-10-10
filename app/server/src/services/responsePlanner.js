@@ -45,19 +45,24 @@ export class ResponsePlanner {
         break;
       }
 
-      case 'DELIVERY_INQUIRY': {
+      case 'DELIVERY_INQUIRY':
+      case 'ORDER_DELIVERY_CHARGES': {
         const prod = resolvedEntity?.entity || context.activeProduct;
         const fee = prod?.deliveryCharge || 199;
         if (prod) {
           const names = ProductSummaryService.normalizeProductName(prod.title);
           textReply = `Ji, *${names.customerFriendlyName}* ke delivery charges Rs. ${fee} hain (tamam Pakistan mein 3–5 working days).`;
+        } else if (context.activeOrder) {
+          const ord = context.activeOrder;
+          textReply = `Ji, order #${ord.orderNumber} ke delivery charges Rs. ${ord.shippingFee || 199} hain.`;
         } else {
           textReply = `Hamare standard delivery charges Rs. ${fee} hain tamam Pakistan mein.`;
         }
         break;
       }
 
-      case 'TOTAL_INQUIRY': {
+      case 'TOTAL_INQUIRY':
+      case 'ORDER_TOTAL': {
         const prod = resolvedEntity?.entity || context.activeProduct;
         if (prod) {
           const names = ProductSummaryService.normalizeProductName(prod.title);
@@ -65,6 +70,9 @@ export class ResponsePlanner {
           const delivery = Number(prod.deliveryCharge || 199);
           const total = price + delivery;
           textReply = `Ji, *${names.customerFriendlyName}* ki price Rs. ${price} aur delivery Rs. ${delivery} mila kar kul total Rs. ${total} banta hai.`;
+        } else if (context.activeOrder) {
+          const ord = context.activeOrder;
+          textReply = `Order #${ord.orderNumber} ka kul total Rs. ${Number(ord.totalAmount).toLocaleString()} hai.`;
         } else {
           textReply = `Delivery charges Rs. 199 hain. Aap kis product ka total bill maloom karna chahtay hain?`;
         }
@@ -125,6 +133,11 @@ export class ResponsePlanner {
         } else {
           textReply = `Main bilkul theek hoon, shukriya! Aap sunayein, main aapki kya madad kar sakti hoon?`;
         }
+        break;
+      }
+
+      case 'CLARIFICATION_NEEDED': {
+        textReply = resolvedEntity?.clarificationPrompt || extra.defaultReply || `Mujhe aapki baat ka exact matlab samajh nahi aaya. Kya aap wazeh farma saktay hain?`;
         break;
       }
 

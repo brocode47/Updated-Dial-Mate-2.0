@@ -1,6 +1,7 @@
 import { ConversationStateService } from './conversationStateService.js';
 import { ProductSummaryService } from './productSummaryService.js';
 import { DeliveryService } from './deliveryService.js';
+import { MessageNormalizer } from './conversationBrain.js';
 
 export const ActiveTopic = {
   PRODUCT: 'PRODUCT',
@@ -15,6 +16,12 @@ export const ResolvedEntityType = {
   PRODUCT: 'PRODUCT',
   ORDER: 'ORDER',
   CUSTOMER: 'CUSTOMER',
+  DELIVERY_POLICY: 'DELIVERY_POLICY',
+  PAYMENT_POLICY: 'PAYMENT_POLICY',
+  RETURN_POLICY: 'RETURN_POLICY',
+  STORE_INFO: 'STORE_INFO',
+  HUMAN_SUPPORT: 'HUMAN_SUPPORT',
+  CASUAL_TOPIC: 'CASUAL_TOPIC',
   NONE: 'NONE'
 };
 
@@ -103,8 +110,9 @@ export class ConversationContextResolver {
       }
     }
 
-    // 5. Product Pronouns ("iski price", "iska rate", "iska link", "iska total", "iski delivery", "ye kitne ka hai", "ye wala")
-    const isProductPronoun = /\b(iski|iska|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh)\b/i.test(clean);
+    // 5. Product Pronouns & Elliptical Continuation ("iski price", "dc?", "total?", "iska link", "ye kitne ka hai", "same wala")
+    const norm = MessageNormalizer.normalize(text);
+    const isProductPronoun = Boolean(norm.hasPronoun || norm.ellipticalType || /\b(iski|iska|iske|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|uske|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh|same\s*wala|upar\s*wala|jo\s*bataya|dc\?|dc)\b/i.test(clean));
     if (isProductPronoun && !/\border\b/i.test(clean)) {
       if (activeProd && !ConversationStateService.isRejected(state, activeProd)) {
         return { entityType: ResolvedEntityType.PRODUCT, entity: activeProd, isAmbiguous: false, candidates: [activeProd] };

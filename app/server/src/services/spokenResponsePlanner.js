@@ -63,7 +63,7 @@ export class SpokenResponsePlanner {
     }
 
     // 2. Product discussion in voice (price, delivery, total, details)
-    if (activeProduct && (intent === 'PRODUCT_INQUIRY' || intent === 'PRODUCT_DETAIL' || intent === 'ORDER_DELIVERY_CHARGES' || intent === 'ORDER_TOTAL' || intent === 'TOTAL_INQUIRY')) {
+    if (activeProduct && (intent === 'PRODUCT_INQUIRY' || intent === 'PRODUCT_DETAIL' || intent === 'ORDER_DELIVERY_CHARGES' || intent === 'DELIVERY_INQUIRY' || intent === 'ORDER_TOTAL' || intent === 'TOTAL_INQUIRY' || intent === 'TOTAL_COST_INQUIRY')) {
       const names = ProductSummaryService.normalizeProductName(activeProduct.title);
       const priceNum = activeProduct.numericPrice || 499;
       const deliveryNum = deliveryQuote?.deliveryCharge || 199;

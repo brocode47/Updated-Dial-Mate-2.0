@@ -115,6 +115,30 @@ export class ResponseQualityControlService {
       }
     }
 
+    // 4b. VACUOUS NON-ANSWER GUARD: Never send "Ji, main samajh gayi hoon" when answering product attribute query
+    if (replyText.includes('main samajh gayi hoon') && (replyText.includes('mazeed details') || replyText.length < 50)) {
+      if (activeProduct && (intent === 'DELIVERY_INQUIRY' || intent === 'ORDER_DELIVERY_CHARGES' || /\b(dc|delivery|shipping)\b/i.test(userMessage))) {
+        issues.push('Grounded delivery answer provided instead of generic acknowledgment');
+        const prodName = ProductSummaryService.normalizeProductName(activeProduct.title).customerFriendlyName;
+        const fee = activeProduct.deliveryCharge || 199;
+        replyText = `Ji, *${prodName}* ke delivery charges Rs. ${fee} hain (tamam Pakistan mein 3–5 working days).`;
+        repaired = true;
+      } else if (activeProduct && (intent === 'TOTAL_INQUIRY' || intent === 'ORDER_TOTAL' || /\b(total|final|all inclusive)\b/i.test(userMessage))) {
+        issues.push('Grounded total answer provided instead of generic acknowledgment');
+        const prodName = ProductSummaryService.normalizeProductName(activeProduct.title).customerFriendlyName;
+        const price = Number(activeProduct.numericPrice || activeProduct.price || 499);
+        const fee = Number(activeProduct.deliveryCharge || 199);
+        const total = price + fee;
+        replyText = `Ji, *${prodName}* ki price Rs. ${price} aur delivery Rs. ${fee} mila kar kul total Rs. ${total} banta hai.`;
+        repaired = true;
+      } else if (activeProduct && (intent === 'PRODUCT_DETAIL' || intent === 'PRODUCT_PRICE' || /\b(price|rate|kitne)\b/i.test(userMessage))) {
+        issues.push('Grounded price answer provided instead of generic acknowledgment');
+        const prodName = ProductSummaryService.normalizeProductName(activeProduct.title).customerFriendlyName;
+        replyText = `Ji, *${prodName}* ki price Rs. ${activeProduct.numericPrice || activeProduct.price} hai.`;
+        repaired = true;
+      }
+    }
+
     // 5. DUPLICATE FACT & SENTENCE CLEANING
     replyText = this.deduplicateSentences(replyText);
 

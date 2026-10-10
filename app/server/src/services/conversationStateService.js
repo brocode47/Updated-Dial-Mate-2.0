@@ -1,4 +1,5 @@
 import { redis } from '../lib/redis.js';
+import { MessageNormalizer } from './conversationBrain.js';
 
 // Fallback in-memory state store if Redis is offline
 const memoryStore = new Map();
@@ -134,13 +135,60 @@ export class ConversationStateService {
     const lastMentEntity = partialState.lastMentionedEntity !== undefined ? partialState.lastMentionedEntity : (current.lastMentionedEntity || (currentProd ? { type: 'PRODUCT', id: activeProdId, title: currentProd?.title } : null));
 
     // Stages
-    const convStage = partialState.conversationStage || current.conversationStage || (currentOrd ? 'ORDER_SERVICING' : (currentProd ? 'PRODUCT_DISCOVERY' : 'GREETING'));
+    const convStage = partialState.conversationPhase || partialState.conversationStage || current.conversationPhase || current.conversationStage || (currentOrd ? 'ORDER_SERVICING' : (currentProd ? 'PRODUCT_DISCOVERY' : 'GREETING'));
     const chkStage = partialState.checkoutStage !== undefined ? partialState.checkoutStage : (partialState.checkoutState?.step || current.checkoutStage || null);
     const pendClarification = partialState.pendingClarification !== undefined ? partialState.pendingClarification : (current.pendingClarification || null);
+
+    // Active Entity representation (Product, Order, Customer, Policy, etc.)
+    let activeEntity = partialState.activeEntity !== undefined
+      ? partialState.activeEntity
+      : (current.activeEntity || null);
+
+    if (currentProd && (!activeEntity || activeEntity.type === 'PRODUCT' || partialState.activeProduct !== undefined)) {
+      activeEntity = {
+        type: 'PRODUCT',
+        id: activeProdId,
+        title: currentProd.title || currentProd.name,
+        price: activeProdPrice,
+        numericPrice: currentProd.numericPrice || null,
+        deliveryCharge: partialState.activeDeliveryCharge ?? current.activeDeliveryCharge ?? 199,
+        url: activeProdUrl
+      };
+    } else if (currentOrd && (!activeEntity || activeEntity.type === 'ORDER' || partialState.activeOrder !== undefined)) {
+      activeEntity = {
+        type: 'ORDER',
+        id: activeOrdId,
+        orderNumber: activeOrdNumber,
+        status: activeOrdStatus,
+        totalAmount: currentOrd.totalAmount || null
+      };
+    }
+
+    // Recent Entities Stack
+    const recentEntities = [...(partialState.recentEntities || current.recentEntities || [])];
+    if (activeEntity && !recentEntities.some(e => e.id === activeEntity.id && e.type === activeEntity.type)) {
+      recentEntities.unshift(activeEntity);
+      if (recentEntities.length > 5) recentEntities.pop();
+    }
+
+    // Topic history
+    const currentTopic = partialState.recentTopic || partialState.currentTopic || current.recentTopic || current.currentTopic || null;
+    const prevTopic = (currentTopic && currentTopic !== current.currentTopic) ? current.currentTopic : (current.previousTopic || null);
+    const prevIntent = (lastInt && lastInt !== current.activeIntent) ? current.activeIntent : (current.previousIntent || null);
 
     const updated = {
       ...current,
       ...partialState,
+      // Active entity representation
+      activeEntity,
+      recentEntities,
+      currentTopic,
+      previousTopic: prevTopic,
+      recentTopic: currentTopic,
+      currentIntent: lastInt,
+      previousIntent: prevIntent,
+      conversationPhase: convStage,
+
       // Active product entities
       activeProduct: currentProd,
       currentProduct: currentProd,
@@ -559,8 +607,13 @@ export class ConversationStateService {
       }
     }
 
-    // 2. Direct Pronoun References ("iski", "iska", "is ki", "is ka", "iss ki", "iss ka", "yeh", "ye", "this", "that", "item", "product", etc.)
-    if (/\b(iska|iski|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh)\b/i.test(clean)) {
+    // 2. Direct Pronoun & Elliptical References ("iski", "iska", "dc?", "price?", "link?", "total?", "ye", "woh", "same wala", "upar wala", etc.)
+    const normalized = MessageNormalizer.normalize(text);
+    if (
+      normalized.hasPronoun ||
+      normalized.ellipticalType ||
+      /\b(iska|iski|iske|is\s*ki|is\s*ka|iss\s*ki|iss\s*ka|ye\s*wala|yeh\s*wala|ye|yeh|this|that|item|product|uska|uski|uske|us\s*ka|us\s*ki|woh\s*wala|wo\s*wala|wo|woh|same\s*wala|upar\s*wala|jo\s*bataya|jo\s*dikhaya|dc\?|dc)\b/i.test(clean)
+    ) {
       const candidate = (current && !this.isRejected(state, current))
         ? current
         : products.find(p => !this.isRejected(state, p)) || null;

@@ -1,3 +1,5 @@
+import { MessageNormalizer, SemanticContextResolver, IntentEngine } from './conversationBrain.js';
+
 /**
  * Deterministic Intent Resolver for Dial Mate 2.0 / Zara
  *
@@ -85,6 +87,15 @@ export class IntentResolver {
   static resolveIntent(text = '', context = {}) {
     const clean = this.normalizeText(text);
     const state = context.state || {};
+
+    // Semantic Intent Understanding from Conversation Brain
+    const norm = MessageNormalizer.normalize(text);
+    const discourse = SemanticContextResolver.evaluateDiscourse(norm, state, { orders: context.recentOrders });
+    const entityRes = SemanticContextResolver.resolveEntity(norm, state, discourse, { orders: context.recentOrders });
+    const brainRes = IntentEngine.inferIntent(norm, discourse, entityRes, state);
+    if (brainRes && brainRes.intent && brainRes.intent !== 'GENERAL_QUERY') {
+      return brainRes;
+    }
 
     // 1. Direct code shortcuts
     if (clean === '1' || clean === 'confirm') {
