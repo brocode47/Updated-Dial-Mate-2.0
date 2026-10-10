@@ -5,7 +5,7 @@
 
 export function parseMediaMetadata(payload = {}) {
   const type = (payload.type || '').toLowerCase();
-  const caption = (payload.caption || payload.content || '').trim();
+  const caption = (payload.caption || payload.content || payload.message?.conversation || payload.message?.extendedTextMessage?.text || '').trim();
   const fileUrl = payload.fileUrl || null;
   const fileName = payload.fileName || (payload.key?.id ? `${payload.key.id}` : null);
   const mimeType = payload.mimetype || payload.mimeType || null;

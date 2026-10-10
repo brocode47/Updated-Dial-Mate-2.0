@@ -129,7 +129,8 @@ export class WhatsAppAgentService {
       shopDomain,
       sessionId,
       messageId = null,
-      isVoiceInbound = false
+      isVoiceInbound = false,
+      lockContext = null
     } = params;
 
     let { fromPhone, messageText } = params;
@@ -332,11 +333,71 @@ export class WhatsAppAgentService {
     let responseSource = 'rule_engine';
 
     // =========================================================================
+    // 9b. FEATURE FLAGGED: ZARA AGENT CORE (PHASE 2 LLM AGENT ROUTING)
+    // Disabled by default (USE_ZARA_AGENT_CORE=false). Retains legacy routing.
+    // =========================================================================
+    const { isZaraAgentCoreEnabled } = await import('../config/features.js');
+    if (isZaraAgentCoreEnabled(cleanPhone)) {
+      try {
+        const { ZaraAgentCore } = await import('./zaraAgentCore.js');
+        const coreResult = await ZaraAgentCore.handleTurn({
+          messageText,
+          fromPhone: cleanPhone,
+          shop,
+          customer,
+          state: contextSnapshot,
+          turns: state.recentTurns || [],
+          lockContext
+        });
+
+        if (coreResult && coreResult.replyText) {
+          replyText = coreResult.replyText;
+          usedLLM = true;
+          executedAction = coreResult.toolCallsExecuted?.[0]?.name || 'zara_agent_core';
+          responseSource = 'zara_agent_core';
+
+          // Apply proposed state updates
+          if (coreResult.proposedStateUpdates?.activeProduct) {
+            activeProduct = coreResult.proposedStateUpdates.activeProduct;
+            await ConversationStateService.setActiveProduct(conversationKey, activeProduct);
+          }
+          if (coreResult.proposedStateUpdates?.activeOrder) {
+            activeOrder = coreResult.proposedStateUpdates.activeOrder;
+            await ConversationStateService.setActiveOrder(conversationKey, activeOrder);
+          }
+          if (coreResult.proposedStateUpdates?.activeOrderStatus) {
+            await ConversationStateService.updateState(conversationKey, {
+              activeOrderStatus: coreResult.proposedStateUpdates.activeOrderStatus,
+              recentTopic: 'order'
+            });
+          }
+          if (coreResult.proposedStateUpdates?.rejectedProduct) {
+            await ConversationStateService.rejectProduct(conversationKey, coreResult.proposedStateUpdates.rejectedProduct);
+            activeProduct = null;
+          }
+          if (coreResult.proposedStateUpdates?.unrejectedProduct) {
+            await ConversationStateService.unrejectProduct(conversationKey, coreResult.proposedStateUpdates.unrejectedProduct);
+          }
+          if (coreResult.proposedStateUpdates?.humanEscalationRequested) {
+            await ConversationStateService.updateState(conversationKey, {
+              humanEscalationRequested: true,
+              escalatedAt: Date.now()
+            });
+          }
+        }
+      } catch (agentCoreErr) {
+        console.warn(`⚠️ [WhatsAppAgent] ZaraAgentCore invocation note: ${agentCoreErr.message}. Falling back to deterministic dispatcher.`);
+      }
+    }
+
+    // =========================================================================
     // 10. DETERMINISTIC ACTION DISPATCHER
     // =========================================================================
 
     // CASE A: Standalone Order Number Input (e.g. "123", "1643", "#1643")
-    if (detected.intent === 'ORDER_NUMBER_INPUT') {
+    if (replyText) {
+      // Already handled by ZaraAgentCore when feature flag is active
+    } else if (detected.intent === 'ORDER_NUMBER_INPUT') {
       executedAction = 'order_number_lookup';
       routingDecision.orderLookup = true;
       responseSource = 'order_resolver';
@@ -1142,23 +1203,46 @@ CRITICAL OPERATING RULES:
     // =========================================================================
     // 12. RESPONSE PLANNER & VOICE OUTPUT HANDLING
     // =========================================================================
-    const plannedResponse = ResponsePlanner.planResponse({
-      intent: detected.intent,
-      resolvedEntity: ref,
-      context: {
-        activeProduct,
-        activeOrder,
-        customer: { name: customer?.firstName }
-      },
-      userMessage: messageText,
-      isVoiceInbound,
-      extra: { defaultReply: replyText, executedAction }
-    });
+    let finalReplyText;
+    let finalSpokenText;
+    let shouldSendTextLink = false;
+    let textLinkMessage = null;
+    let plannedResponse = null;
+
+    if (responseSource === 'zara_agent_core') {
+      finalReplyText = replyText;
+      if (isVoiceInbound) {
+        // Unify voice with agent core: extract links for companion text, normalize spoken script
+        const urlMatches = replyText.match(/https?:\/\/[^\s]+/g);
+        if (urlMatches && urlMatches.length > 0) {
+          shouldSendTextLink = true;
+          textLinkMessage = `Ji, yeh raha direct link:\n${urlMatches.join('\n')}`;
+        }
+        finalSpokenText = SpokenResponsePlanner.normalizeSpokenText(replyText);
+      }
+    } else {
+      plannedResponse = ResponsePlanner.planResponse({
+        intent: detected.intent,
+        resolvedEntity: ref,
+        context: {
+          activeProduct,
+          activeOrder,
+          customer: { name: customer?.firstName }
+        },
+        userMessage: messageText,
+        isVoiceInbound,
+        extra: { defaultReply: replyText, executedAction }
+      });
+      finalReplyText = plannedResponse.replyText || replyText;
+      finalSpokenText = plannedResponse.spokenText;
+      shouldSendTextLink = Boolean(plannedResponse.sendTextLink);
+      textLinkMessage = plannedResponse.textLinkMessage;
+    }
 
     // Run Pre-Dispatch Response Quality Control & Truth Validation
     const qcResult = ResponseQualityControlService.validateAndRepair({
-      replyText: plannedResponse.replyText || replyText,
-      spokenText: plannedResponse.spokenText,
+      replyText: finalReplyText,
+      spokenText: finalSpokenText,
       intent: detected.intent,
       activeProduct,
       activeOrder,
@@ -1168,8 +1252,18 @@ CRITICAL OPERATING RULES:
       storeDomain: shop.domain || 'sundaybazaaar.store'
     });
 
-    const finalReplyText = qcResult.replyText;
-    const finalSpokenText = qcResult.spokenText;
+    finalReplyText = qcResult.replyText;
+    if (isVoiceInbound) {
+      finalSpokenText = qcResult.spokenText || finalSpokenText;
+    }
+
+    // Persist assistant reply turn into ConversationStateService for multi-turn history continuity
+    await ConversationStateService.recordTurn(conversationKey, {
+      sender: 'assistant',
+      role: 'assistant',
+      text: finalReplyText,
+      intent: executedAction
+    });
 
     if (qcResult.repaired) {
       console.log(`🛡️ [QC:REPAIRED] Outbound response repaired: ${qcResult.issues.join(' | ')}`);
@@ -1197,9 +1291,9 @@ CRITICAL OPERATING RULES:
           }
           console.log(`✅ [WhatsApp:VOICE_OUT] Voice reply delivered to ${fromPhone}`);
 
-          if (plannedResponse.sendTextLink && plannedResponse.textLinkMessage) {
+          if (shouldSendTextLink && textLinkMessage) {
             if (typeof waClient?.sendMessage === 'function') {
-              await waClient.sendMessage(fromPhone, plannedResponse.textLinkMessage);
+              await waClient.sendMessage(fromPhone, textLinkMessage);
               console.log(`🔗 [WhatsApp:VOICE_LINK_DELIVERED] Sent companion text link to ${fromPhone}`);
             }
           }
@@ -1323,7 +1417,7 @@ pendingAction: ${finalStateAfter.pendingAction || 'none'}
 recentEntities: ${JSON.stringify(finalStateAfter.recentEntities)}
 
 FINAL RESPONSE:
-${isVoiceInbound && plannedResponse.spokenText ? plannedResponse.spokenText : replyText}
+${isVoiceInbound && (finalSpokenText || plannedResponse?.spokenText) ? (finalSpokenText || plannedResponse?.spokenText) : finalReplyText}
 
 ------------------------------------------------------
 `);

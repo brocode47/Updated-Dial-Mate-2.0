@@ -53,6 +53,39 @@ export class OrderResolver {
   }
 
   /**
+   * Verifies whether an order is owned by or authorized for the caller phone number
+   *
+   * @param {object} order
+   * @param {string} fromPhone
+   * @returns {boolean}
+   */
+  static isOrderAuthorizedForPhone(order, fromPhone) {
+    if (!order || !fromPhone) return false;
+    const normCaller = PhoneNormalizer.normalize(fromPhone);
+    if (!normCaller) return false;
+
+    // 1. Check order.customerPhone if available
+    const orderPhone = order.customerPhone || order.payload?.shipping_address?.phone || order.payload?.customer?.phone || order.payload?.phone;
+    if (orderPhone) {
+      const normOrder = PhoneNormalizer.normalize(orderPhone);
+      if (normOrder && (normOrder.last10 === normCaller.last10 || normOrder.digits === normCaller.digits)) {
+        return true;
+      }
+    }
+
+    // 2. Check if raw order payload contains any search variant of caller phone
+    const variants = PhoneNormalizer.getSearchVariants(fromPhone);
+    const payloadStr = typeof order.payload === 'string' ? order.payload : JSON.stringify(order.payload || {});
+    for (const v of variants) {
+      if (v && v.length >= 7 && payloadStr.includes(v)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Resolves customer orders by customer identity signals:
    * phone, name, address, city, product line items, date
    *
@@ -72,77 +105,26 @@ export class OrderResolver {
 
     if (!shopId) return { found: false, count: 0, orders: [] };
 
-    // 1. If explicit order number was given, attempt exact match first
+    // 1. If explicit order number was given, attempt exact match with authorization check
     if (orderNumber) {
       const exact = await this.resolveExactOrderNumber(shopId, orderNumber);
       if (exact) {
+        if (fromPhone && !this.isOrderAuthorizedForPhone(exact, fromPhone)) {
+          return { found: false, unauthorized: true, count: 0, orders: [], reason: 'ORDER_OWNERSHIP_UNVERIFIED' };
+        }
         return { found: true, order: exact, orders: [exact], count: 1, multiple: false };
       }
       return { found: false, count: 0, orders: [] };
     }
 
-    // 2. Fetch candidate orders for this shop
+    // 2. Fetch candidate orders strictly for the authenticated sender phone
     let candidateOrders = [];
-
-    // 2a. Search by WhatsApp sender phone via canonical PhoneNormalizer
     if (fromPhone) {
       candidateOrders = await PhoneNormalizer.resolveOrders(shopId, fromPhone);
     }
 
-    // 2b. If phone yielded no orders or customer gave explicit name / city / address,
-    // search customers and orders in the shop
-    if (candidateOrders.length === 0 && (customerName || city || address)) {
-      try {
-        const queryOr = [];
-        if (customerName) {
-          const nameClean = customerName.toLowerCase().trim();
-          queryOr.push({ payload: { contains: customerName } });
-          queryOr.push({ payload: { contains: nameClean } });
-          queryOr.push({ payload: { contains: customerName.toUpperCase() } });
-
-          try {
-            const matchingCustomers = await prisma.customer.findMany({
-              where: {
-                shopId,
-                OR: [
-                  { firstName: { contains: customerName } },
-                  { firstName: { contains: nameClean } },
-                  { lastName: { contains: customerName } }
-                ]
-              },
-              select: { id: true }
-            });
-            for (const c of matchingCustomers) {
-              queryOr.push({ customerId: c.id });
-            }
-          } catch (_) {}
-        }
-        if (city) {
-          const cityClean = city.toLowerCase().trim();
-          queryOr.push({ payload: { contains: city } });
-          queryOr.push({ payload: { contains: cityClean } });
-        }
-        if (address) {
-          const addrClean = address.toLowerCase().trim();
-          queryOr.push({ payload: { contains: addrClean } });
-        }
-
-        if (queryOr.length > 0) {
-          const dbOrders = await prisma.order.findMany({
-            where: {
-              shopId,
-              OR: queryOr
-            },
-            orderBy: { createdAt: 'desc' },
-            take: 10
-          });
-          candidateOrders = dbOrders.map(o => this.formatOrderEntity(o)).filter(Boolean);
-        }
-      } catch (err) {
-        console.warn(`[OrderResolver] Identity query error: ${err.message}`);
-      }
-    }
-
+    // SECURITY: If fromPhone yielded no orders or is absent, NEVER perform an unauthenticated
+    // wildcard scan across the tenant database by customerName/city, as this leaks other customers' orders.
     if (candidateOrders.length === 0) {
       return { found: false, count: 0, orders: [] };
     }

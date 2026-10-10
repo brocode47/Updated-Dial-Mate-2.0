@@ -4,6 +4,7 @@ import { waLogger } from '../utils/waLogger.js';
 import { parseMediaMetadata } from '../utils/mediaHandler.js';
 import { MessageTrackerService } from '../services/messageTracker.js';
 import { PhoneNormalizer } from '../services/phoneNormalizer.js';
+import { ConversationLockService } from '../services/conversationLockService.js';
 
 /**
  * Hardened WhatsApp BullMQ Worker
@@ -73,54 +74,16 @@ export async function processWhatsAppJob(job) {
       waLogger.log(traceId, 'DUPLICATE_SKIPPED', { messageId, shopId, sessionId });
       return { success: true, duplicate: true, messageId };
     }
-    // Mark processing
-    await MessageTrackerService.markProcessing(messageId, { shopId, sessionId });
-  }
-
-  // ========================================================
-  // 3. Media Metadata Preparation & Prompt Resolution
-  // ========================================================
-  const mediaInfo = parseMediaMetadata(payload);
-  let messageText = mediaInfo.promptText ? mediaInfo.promptText.trim() : '';
-
-  // Inbound Voice Note Processing: retrieve audio & transcribe with Gemini
-  if (mediaInfo.isMedia && mediaInfo.mediaType === 'audio') {
-    console.log(`🎙️ [WhatsApp:VOICE_IN] Received voice note ${messageId} from ${jid}`);
-    try {
-      const waClient = new WhatsAppClient({
-        baseUrl: process.env.WA_AKG_BASE_URL,
-        apiKey: process.env.WA_AKG_API_KEY,
-        sessionId: String(sessionId),
-        shopId: String(shopId)
-      });
-      const audioBuffer = await waClient.downloadMedia(messageId, {
-        sessionId,
-        fileUrl: mediaInfo.metadata?.fileUrl
-      });
-      if (audioBuffer && audioBuffer.length > 0) {
-        const { AudioTranscriberService } = await import('../services/audioTranscriberService.js');
-        const transcript = await AudioTranscriberService.transcribeAudio(
-          audioBuffer,
-          mediaInfo.metadata?.mimeType || 'audio/ogg'
-        );
-        if (transcript) {
-          messageText = transcript;
-          console.log(`📝 [WhatsApp:TRANSCRIPTION] Transcribed audio ${messageId}: "${transcript}"`);
-        }
-      }
-    } catch (audioErr) {
-      console.warn(`⚠️ [WhatsAppWorker] Voice note transcription notice (${audioErr.message}). Using fallback prompt.`);
+    // Atomic claim: SET NX ensures only one worker claims processing in case of race
+    const claimed = await MessageTrackerService.markProcessing(messageId, { shopId, sessionId });
+    if (!claimed) {
+      waLogger.log(traceId, 'DUPLICATE_SKIPPED', { messageId, shopId, sessionId });
+      return { success: true, duplicate: true, messageId };
     }
   }
 
-  if (!messageText) {
-    waLogger.log(traceId, 'EMPTY_MESSAGE_IGNORED', { messageId, jid });
-    if (messageId) await MessageTrackerService.markCompleted(messageId);
-    return { success: true, ignored: true, reason: 'EMPTY_MESSAGE' };
-  }
-
   // ========================================================
-  // 4. Customer Identity Mapping (Multi-Tenant Scoped)
+  // 3. Customer Identity Mapping (Multi-Tenant Scoped)
   // ========================================================
   let phone = jid.replace(/[^0-9]/g, '');
   try {
@@ -132,129 +95,182 @@ export async function processWhatsAppJob(job) {
     console.warn(`[WhatsAppWorker] Customer identity map notice:`, dbErr.message);
   }
 
-  waLogger.received(traceId, {
-    shopId,
-    shopDomain,
-    sessionId,
-    phone,
-    isMedia: mediaInfo.isMedia,
-    mediaType: mediaInfo.mediaType
-  });
-
   // ========================================================
-  // 5. Process AI Message (External Engine or Native "Zara" Agent)
+  // 4. Conversation Mutex & Message-Timestamp Sequencing
+  // Wraps media preparation, transcription, and AI processing to prevent race conditions
+  // between rapid messages (e.g. voice note followed by quick text).
   // ========================================================
-  let replyText = null;
-  let agentName = 'Zara';
-  let intent = 'GENERAL';
-  let action = null;
-  let externalEngineSuccess = false;
-  const startTime = Date.now();
+  const messageTimestamp = Number(payload.messageTimestamp || payload.key?.timestamp || 0) * 1000 || Date.now();
+  const convLockKey = ConversationLockService.getLockKey(shopId, phone || jid);
 
-  const AI_ENGINE_URL = process.env.AI_ENGINE_URL || (process.env.NODE_ENV === 'test' ? 'http://127.0.0.1:8000' : null);
+  return await ConversationLockService.withLock(convLockKey, async (lockContext) => {
+    // Media Metadata Preparation & Prompt Resolution
+    const mediaInfo = parseMediaMetadata(payload);
+    let messageText = mediaInfo.promptText ? mediaInfo.promptText.trim() : '';
 
-  if (AI_ENGINE_URL && !process.env.DISABLE_EXTERNAL_AI_ENGINE) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-      waLogger.aiRequestStart(traceId, { url: `${AI_ENGINE_URL}/chat`, shopId, phone });
-
-      const response = await fetch(`${AI_ENGINE_URL}/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(process.env.AI_ENGINE_API_KEY ? { 'X-AI-ENGINE-KEY': process.env.AI_ENGINE_API_KEY } : {})
-        },
-        body: JSON.stringify({
-          shop_id: shopId,
-          customer_phone: phone,
-          message: messageText
-        }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const aiResult = await response.json();
-        replyText = (aiResult?.response || '').trim();
-        agentName = aiResult?.agent || 'support';
-        intent = aiResult?.intent || 'general';
-        externalEngineSuccess = true;
-        waLogger.aiResponseReceived(traceId, {
-          agent: agentName,
-          intent,
-          confidence: aiResult?.confidence || 0.9,
-          latencyMs: Date.now() - startTime
+    // Inbound Voice Note Processing: retrieve audio & transcribe with Gemini
+    if (mediaInfo.isMedia && mediaInfo.mediaType === 'audio') {
+      console.log(`🎙️ [WhatsApp:VOICE_IN] Received voice note ${messageId} from ${jid}`);
+      try {
+        const waClient = new WhatsAppClient({
+          baseUrl: process.env.WA_AKG_BASE_URL,
+          apiKey: process.env.WA_AKG_API_KEY,
+          sessionId: String(sessionId),
+          shopId: String(shopId)
         });
+        const audioBuffer = await waClient.downloadMedia(messageId, {
+          sessionId,
+          fileUrl: mediaInfo.metadata?.fileUrl
+        });
+        if (audioBuffer && audioBuffer.length > 0) {
+          const { AudioTranscriberService } = await import('../services/audioTranscriberService.js');
+          const transcript = await AudioTranscriberService.transcribeAudio(
+            audioBuffer,
+            mediaInfo.metadata?.mimeType || 'audio/ogg'
+          );
+          if (transcript) {
+            messageText = transcript;
+            console.log(`📝 [WhatsApp:TRANSCRIPTION] Transcribed audio ${messageId}: "${transcript}"`);
+          }
+        }
+      } catch (audioErr) {
+        console.warn(`⚠️ [WhatsAppWorker] Voice note transcription notice (${audioErr.message}). Using fallback prompt.`);
       }
-    } catch (e) {
-      console.log(`ℹ️ [WhatsAppWorker] External AI engine unavailable (${e.message}). Routing to native WhatsAppAgentService ("Zara").`);
     }
-  }
 
-  if (!externalEngineSuccess) {
-    try {
-      const { WhatsAppAgentService } = await import('../services/whatsappAgentService.js');
-      const agentResult = await WhatsAppAgentService.handleIncomingMessage({
-        shopId,
-        shopDomain,
-        sessionId,
-        fromPhone: jid,
-        messageText,
-        messageId,
-        isVoiceInbound: mediaInfo.isMedia && mediaInfo.mediaType === 'audio'
-      });
-
-      agentName = 'Zara';
-      intent = agentResult?.intent || 'GENERAL';
-      action = agentResult?.action || null;
-      replyText = agentResult?.replyText;
-
-      waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText?.length || 0 });
-    } catch (agentErr) {
-      waLogger.failed(traceId, { error: `WhatsApp Agent failed: ${agentErr.message}`, recoverable: true });
-      if (messageId) {
-        await MessageTrackerService.handleFailure(messageId, true);
-      }
-      throw new Error(`[Recoverable WhatsApp Agent Error] ${agentErr.message}`);
+    if (!messageText) {
+      waLogger.log(traceId, 'EMPTY_MESSAGE_IGNORED', { messageId, jid });
+      if (messageId) await MessageTrackerService.markCompleted(messageId);
+      return { success: true, ignored: true, reason: 'EMPTY_MESSAGE' };
     }
-  } else if (replyText) {
-    // Send external engine reply via WhatsApp AKG
-    const waClient = new WhatsAppClient({
-      baseUrl: process.env.WA_AKG_BASE_URL,
-      apiKey: process.env.WA_AKG_API_KEY,
-      sessionId: String(sessionId),
-      shopId: String(shopId)
+
+    waLogger.received(traceId, {
+      shopId,
+      shopDomain,
+      sessionId,
+      phone,
+      isMedia: mediaInfo.isMedia,
+      mediaType: mediaInfo.mediaType
     });
 
-    try {
-      await waClient.sendMessage(jid, replyText, {
-        quotedMessageId: messageId || undefined
-      });
-      waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText.length });
-    } catch (waErr) {
-      waLogger.failed(traceId, { error: `WA-AKG delivery failed: ${waErr.message}`, recoverable: true });
-      if (messageId) {
-        await MessageTrackerService.handleFailure(messageId, true);
+    let replyText = null;
+    let agentName = 'Zara';
+    let intent = 'GENERAL';
+    let action = null;
+    let externalEngineSuccess = false;
+    const startTime = Date.now();
+
+    const AI_ENGINE_URL = process.env.AI_ENGINE_URL || (process.env.NODE_ENV === 'test' ? 'http://127.0.0.1:8000' : null);
+
+    if (AI_ENGINE_URL && !process.env.DISABLE_EXTERNAL_AI_ENGINE) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        waLogger.aiRequestStart(traceId, { url: `${AI_ENGINE_URL}/chat`, shopId, phone });
+
+        const response = await fetch(`${AI_ENGINE_URL}/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.AI_ENGINE_API_KEY ? { 'X-AI-ENGINE-KEY': process.env.AI_ENGINE_API_KEY } : {})
+          },
+          body: JSON.stringify({
+            shop_id: shopId,
+            customer_phone: phone,
+            message: messageText
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const aiResult = await response.json();
+          replyText = (aiResult?.response || '').trim();
+          agentName = aiResult?.agent || 'support';
+          intent = aiResult?.intent || 'general';
+          externalEngineSuccess = true;
+          waLogger.aiResponseReceived(traceId, {
+            agent: agentName,
+            intent,
+            confidence: aiResult?.confidence || 0.9,
+            latencyMs: Date.now() - startTime
+          });
+        }
+      } catch (e) {
+        console.log(`ℹ️ [WhatsAppWorker] External AI engine unavailable (${e.message}). Routing to native WhatsAppAgentService ("Zara").`);
       }
-      throw new Error(`[Recoverable WA-AKG Error] ${waErr.message}`);
     }
-  }
 
-  // ========================================================
-  // 7. Mark Message Completed
-  // ========================================================
-  if (messageId) {
-    await MessageTrackerService.markCompleted(messageId, { shopId, sessionId });
-  }
+    if (!externalEngineSuccess) {
+      try {
+        const { WhatsAppAgentService } = await import('../services/whatsappAgentService.js');
+        const agentResult = await WhatsAppAgentService.handleIncomingMessage({
+          shopId,
+          shopDomain,
+          sessionId,
+          fromPhone: jid,
+          messageText,
+          messageId,
+          isVoiceInbound: mediaInfo.isMedia && mediaInfo.mediaType === 'audio',
+          lockContext
+        });
 
-  return {
-    success: true,
-    messageId,
-    traceId,
-    agent: agentName,
-    intent: intent,
-    action: action
-  };
+        agentName = 'Zara';
+        intent = agentResult?.intent || 'GENERAL';
+        action = agentResult?.action || null;
+        replyText = agentResult?.replyText;
+
+        waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText?.length || 0 });
+      } catch (agentErr) {
+        waLogger.failed(traceId, { error: `WhatsApp Agent failed: ${agentErr.message}`, recoverable: true });
+        if (messageId) {
+          await MessageTrackerService.handleFailure(messageId, true);
+        }
+        throw new Error(`[Recoverable WhatsApp Agent Error] ${agentErr.message}`);
+      }
+    } else if (replyText) {
+      // Send external engine reply via WhatsApp AKG
+      const waClient = new WhatsAppClient({
+        baseUrl: process.env.WA_AKG_BASE_URL,
+        apiKey: process.env.WA_AKG_API_KEY,
+        sessionId: String(sessionId),
+        shopId: String(shopId)
+      });
+
+      try {
+        await waClient.sendMessage(jid, replyText, {
+          quotedMessageId: messageId || undefined
+        });
+        waLogger.replySent(traceId, { to: jid, sessionId, replyLength: replyText.length });
+      } catch (waErr) {
+        waLogger.failed(traceId, { error: `WA-AKG delivery failed: ${waErr.message}`, recoverable: true });
+        if (messageId) {
+          await MessageTrackerService.handleFailure(messageId, true);
+        }
+        throw new Error(`[Recoverable WA-AKG Error] ${waErr.message}`);
+      }
+    }
+
+    // ========================================================
+    // 7. Mark Message Completed
+    // ========================================================
+    if (lockContext && typeof lockContext.isLocked === 'function' && !lockContext.isLocked()) {
+      waLogger.failed(traceId, { error: 'Lock lost before completion. Preventing completion state overwrite.' });
+      throw new Error(`[ConversationLockService] Lock lease lost during execution for ${convLockKey}`);
+    }
+
+    if (messageId) {
+      await MessageTrackerService.markCompleted(messageId, { shopId, sessionId });
+    }
+
+    return {
+      success: true,
+      messageId,
+      traceId,
+      agent: agentName,
+      intent: intent,
+      action: action
+    };
+  });
 }

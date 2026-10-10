@@ -21,7 +21,7 @@ const webhookWorker = new Worker('webhookQueue', processWebhookJob, {
 
 const whatsappWorker = new Worker('whatsappQueue', processWhatsAppJob, {
   connection,
-  concurrency: 1 // Sequential processing to prevent state race conditions
+  concurrency: parseInt(process.env.WHATSAPP_WORKER_CONCURRENCY || '10', 10) // Concurrent across distinct customers; per-conversation serialized via ConversationLockService
 });
 
 // Setup error handlers
